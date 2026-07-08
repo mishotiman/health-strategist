@@ -1,0 +1,19 @@
+# Python
+__pycache__/
+*.py[cod]
+.venv/
+venv/
+*.egg-info/
+
+# Env / secrets
+.env
+
+# Corpus PDFs — keep the repo light; track a sources manifest instead
+data/papers/*.pdf
+data/papers/*.PDF
+
+# OS / editor
+.DS_Store
+Thumbs.db
+.idea/
+.vscode/

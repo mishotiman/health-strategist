@@ -1,0 +1,15 @@
+# Web
+fastapi
+uvicorn[standard]
+pydantic-settings
+
+# Database
+psycopg[binary]
+pgvector
+
+# LLM + embeddings (used from Week 1 Wed onward)
+anthropic
+voyageai
+
+# PDF / ingestion (used from Week 1 Tue onward)
+pymupdf
