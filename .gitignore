@@ -8,9 +8,11 @@ venv/
 # Env / secrets
 .env
 
-# Corpus PDFs — keep the repo light; track a sources manifest instead
+# Corpus source files — keep the repo light; track data/sources.md instead
 data/papers/*.pdf
 data/papers/*.PDF
+data/papers/*.xml
+data/papers/*.nxml
 
 # OS / editor
 .DS_Store
