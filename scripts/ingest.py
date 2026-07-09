@@ -1,49 +1,33 @@
-"""Ingestion v0 — parse the seed corpus into the documents + chunks tables.
-
-Run inside the api container so the `db` hostname resolves:
+"""Ingestion — chunk the plain-text corpus into the documents + chunks tables.
 
     docker compose exec -T api python scripts/ingest.py
 
-Parses full-text JATS XML (Europe PMC) and one PDF (SportRxiv), splits each
-paper into recursive/structure-aware chunks, and loads them. Embeddings are
-left NULL here — they get filled on Wednesday. Re-running is idempotent
-(truncate + reload).
+Reads data/text/*.txt (produced by extract_text.py) and data/text/_metadata.json,
+splits each paper into recursive/structure-aware chunks, and loads them.
+Embeddings are left NULL here — filled later by embed_chunks.py. Re-running is
+idempotent (truncate + reload).
 """
 
 from __future__ import annotations
 
 import glob
+import json
 import os
 import re
-import xml.etree.ElementTree as ET
 
-import fitz  # PyMuPDF
 import psycopg
 
-PAPERS_DIR = os.path.join(os.path.dirname(__file__), "..", "data", "papers")
+TEXT_DIR = os.path.join(os.path.dirname(__file__), "..", "data", "text")
 DATABASE_URL = os.environ.get("DATABASE_URL", "postgresql://phs:phs@db:5432/phs")
 
 MAX_CHARS = 1000       # ~250 tokens
 OVERLAP_CHARS = 150    # ~15% overlap
 
 
-# --------------------------------------------------------------------------- #
-# Text helpers
-# --------------------------------------------------------------------------- #
-def _localname(tag: str) -> str:
-    return tag.split("}")[-1]
-
-
-def _text(el: ET.Element | None) -> str:
-    if el is None:
-        return ""
-    return re.sub(r"\s+", " ", "".join(el.itertext())).strip()
-
-
 def recursive_split(text: str, max_chars: int = MAX_CHARS,
                     overlap: int = OVERLAP_CHARS) -> list[str]:
     """Split on the largest natural boundary that keeps pieces <= max_chars,
-    descending paragraph -> line -> sentence -> word -> hard cut. Then add a
+    descending paragraph -> line -> sentence -> word -> hard cut, then add a
     character overlap between consecutive pieces so context isn't lost at seams.
     """
     separators = ["\n\n", "\n", ". ", " ", ""]
@@ -81,88 +65,40 @@ def recursive_split(text: str, max_chars: int = MAX_CHARS,
     return out
 
 
-# --------------------------------------------------------------------------- #
-# Parsers -> list of blocks {heading, text, page}
-# --------------------------------------------------------------------------- #
-def parse_jats(path: str) -> dict:
-    root = ET.parse(path).getroot()
-    front = root.find(".//front")
+def parse_txt(path: str) -> list[dict]:
+    """Turn a plain-text paper into blocks {heading, text, page}, using the
+    "## heading" / "## Page N" marker lines written by extract_text.py."""
+    blocks: list[dict] = []
+    heading, page, buffer = "", None, []
 
-    title = _text(front.find(".//title-group/article-title")) if front is not None else ""
-    journal = _text(front.find(".//journal-title")) if front is not None else ""
+    def flush() -> None:
+        nonlocal buffer
+        body = "\n".join(buffer).strip()
+        if body:
+            blocks.append({"heading": heading, "text": body, "page": page})
+        buffer = []
 
-    authors: list[str] = []
-    if front is not None:
-        for contrib in front.findall(".//contrib"):
-            # Some journals tag <contrib contrib-type="author">; others leave
-            # <contrib> untyped inside <contrib-group content-type="author">.
-            # Accept authors (or untyped) and skip editors / other roles.
-            ctype = contrib.get("contrib-type")
-            if ctype and ctype != "author":
+    with open(path, encoding="utf-8") as f:
+        for line in f.read().splitlines():
+            if line.startswith("## "):
+                flush()
+                label = line[3:].strip()
+                page_marker = re.match(r"Page (\d+)$", label)
+                if page_marker:
+                    heading, page = "", int(page_marker.group(1))
+                else:
+                    heading, page = label, None
+            elif line.startswith("# "):  # document title line — skip
                 continue
-            surname = _text(contrib.find(".//surname"))
-            given = _text(contrib.find(".//given-names"))
-            name = " ".join(x for x in [given, surname] if x)
-            if name:
-                authors.append(name)
-
-    year = None
-    if front is not None:
-        for y in front.findall(".//pub-date/year"):
-            if _text(y).isdigit():
-                year = int(_text(y))
-                break
-
-    doi = _text(front.find('.//article-id[@pub-id-type="doi"]')) if front is not None else ""
-    pmcid_match = re.search(r"(PMC\d+)", os.path.basename(path))
-    pmcid = pmcid_match.group(1) if pmcid_match else ""
-    source = (f"https://doi.org/{doi}" if doi
-              else f"https://pmc.ncbi.nlm.nih.gov/articles/{pmcid}/")
-
-    blocks: list[dict] = []
-    body = root.find(".//body")
-    if body is not None:
-        # paragraphs sitting directly under <body> (no section)
-        for p in body.findall("p"):
-            t = _text(p)
-            if t:
-                blocks.append({"heading": "", "text": t, "page": None})
-        # one block per section (direct child <p>s only, so nested subsections
-        # become their own blocks in document order — no duplication)
-        for sec in body.findall(".//sec"):
-            heading = _text(sec.find("title"))
-            paras = [_text(p) for p in sec.findall("p")]
-            sec_text = "\n\n".join(p for p in paras if p)
-            if sec_text:
-                blocks.append({"heading": heading, "text": sec_text, "page": None})
-
-    return {"title": title, "authors": ", ".join(authors), "year": year,
-            "source": source, "blocks": blocks}
+            else:
+                buffer.append(line)
+    flush()
+    return blocks
 
 
-def parse_pdf(path: str) -> dict:
-    doc = fitz.open(path)
-    blocks: list[dict] = []
-    for page_no, page in enumerate(doc, start=1):
-        text = re.sub(r"[ \t]+", " ", page.get_text()).strip()
-        if text:
-            blocks.append({"heading": "", "text": text, "page": page_no})
-    doc.close()
-
-    # Metadata for the one PDF (SportRxiv preprint) comes from the manifest.
-    title = doc.metadata.get("title") or os.path.basename(path)
-    return {"title": "The Resistance Training Dose-Response (Pelland et al., 2024)",
-            "authors": "Pelland, Remmert, Robinson, Hinson, Zourdos", "year": 2024,
-            "source": "https://sportrxiv.org/index.php/server/preprint/view/460",
-            "blocks": blocks}
-
-
-# --------------------------------------------------------------------------- #
-# Chunk + load
-# --------------------------------------------------------------------------- #
 def blocks_to_chunks(blocks: list[dict]) -> list[dict]:
-    """Turn parsed blocks into stored chunks, prefixing each with its section
-    heading so the passage carries a little context."""
+    """Chunk each block, prefixing its section heading so the passage carries
+    a little context."""
     chunks: list[dict] = []
     for block in blocks:
         for piece in recursive_split(block["text"]):
@@ -172,10 +108,14 @@ def blocks_to_chunks(blocks: list[dict]) -> list[dict]:
 
 
 def main() -> None:
-    paths = sorted(glob.glob(os.path.join(PAPERS_DIR, "*.xml")) +
-                   glob.glob(os.path.join(PAPERS_DIR, "*.pdf")))
+    meta_path = os.path.join(TEXT_DIR, "_metadata.json")
+    if not os.path.exists(meta_path):
+        raise SystemExit("data/text/_metadata.json not found — run extract_text.py first.")
+    metadata = json.load(open(meta_path, encoding="utf-8"))
+
+    paths = sorted(glob.glob(os.path.join(TEXT_DIR, "*.txt")))
     if not paths:
-        raise SystemExit(f"No papers found in {PAPERS_DIR}")
+        raise SystemExit(f"No text files in {TEXT_DIR} — run extract_text.py first.")
 
     with psycopg.connect(DATABASE_URL) as conn:
         with conn.cursor() as cur:
@@ -183,15 +123,17 @@ def main() -> None:
 
             total_chunks = 0
             for path in paths:
-                parsed = parse_pdf(path) if path.endswith(".pdf") else parse_jats(path)
+                key = os.path.basename(path)
+                meta = metadata.get(key, {"title": key, "authors": "",
+                                          "year": None, "source": ""})
                 cur.execute(
                     "INSERT INTO documents (title, source, authors, year) "
                     "VALUES (%s, %s, %s, %s) RETURNING id",
-                    (parsed["title"], parsed["source"], parsed["authors"], parsed["year"]),
+                    (meta["title"], meta["source"], meta["authors"], meta["year"]),
                 )
                 doc_id = cur.fetchone()[0]
 
-                chunks = blocks_to_chunks(parsed["blocks"])
+                chunks = blocks_to_chunks(parse_txt(path))
                 for idx, ch in enumerate(chunks):
                     cur.execute(
                         "INSERT INTO chunks (document_id, chunk_index, content, page) "
@@ -199,7 +141,7 @@ def main() -> None:
                         (doc_id, idx, ch["content"], ch["page"]),
                     )
                 total_chunks += len(chunks)
-                print(f"  {os.path.basename(path):48} -> {len(chunks):4} chunks")
+                print(f"  {key:48} -> {len(chunks):4} chunks")
 
         conn.commit()
 

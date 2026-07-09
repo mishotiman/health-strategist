@@ -14,6 +14,9 @@ data/papers/*.PDF
 data/papers/*.xml
 data/papers/*.nxml
 
+# Derived plain-text corpus (regenerate with extract_text.py)
+data/text/
+
 # OS / editor
 .DS_Store
 Thumbs.db
