@@ -93,7 +93,13 @@ def parse_jats(path: str) -> dict:
 
     authors: list[str] = []
     if front is not None:
-        for contrib in front.findall('.//contrib[@contrib-type="author"]'):
+        for contrib in front.findall(".//contrib"):
+            # Some journals tag <contrib contrib-type="author">; others leave
+            # <contrib> untyped inside <contrib-group content-type="author">.
+            # Accept authors (or untyped) and skip editors / other roles.
+            ctype = contrib.get("contrib-type")
+            if ctype and ctype != "author":
+                continue
             surname = _text(contrib.find(".//surname"))
             given = _text(contrib.find(".//given-names"))
             name = " ".join(x for x in [given, surname] if x)

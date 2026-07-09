@@ -10,6 +10,7 @@ pgvector
 # LLM + embeddings (used from Week 1 Wed onward)
 anthropic
 voyageai
+openai  # fallback embeddings provider
 
 # PDF / ingestion (used from Week 1 Tue onward)
 pymupdf
