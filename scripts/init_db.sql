@@ -17,7 +17,20 @@ CREATE TABLE IF NOT EXISTS profiles (
     constraints TEXT,
     injuries    TEXT,
     history     TEXT,
+    sex         TEXT,
+    birth_year  INT,
+    height_cm   NUMERIC,
+    weight_kg   NUMERIC,
     updated_at  TIMESTAMPTZ NOT NULL DEFAULT now()
+);
+
+-- WHOOP OAuth tokens, one connection per user.
+CREATE TABLE IF NOT EXISTS whoop_connections (
+    user_id       BIGINT PRIMARY KEY REFERENCES users(id) ON DELETE CASCADE,
+    access_token  TEXT NOT NULL,
+    refresh_token TEXT,
+    expires_at    TIMESTAMPTZ,
+    updated_at    TIMESTAMPTZ NOT NULL DEFAULT now()
 );
 
 -- Normalized wearable / bloodwork metrics ("any source, one schema") ------
@@ -30,6 +43,10 @@ CREATE TABLE IF NOT EXISTS health_metrics (
     value       DOUBLE PRECISION,
     unit        TEXT
 );
+
+-- Idempotent ingestion: one row per (user, source, date, metric_type).
+CREATE UNIQUE INDEX IF NOT EXISTS uq_health_metrics
+    ON health_metrics (user_id, source, metric_date, metric_type);
 
 -- Knowledge corpus --------------------------------------------------------
 CREATE TABLE IF NOT EXISTS documents (
