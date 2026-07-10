@@ -23,7 +23,7 @@ from app.ingestion import upsert_metrics
 
 AUTH_URL = "https://api.prod.whoop.com/oauth/oauth2/auth"
 TOKEN_URL = "https://api.prod.whoop.com/oauth/oauth2/token"
-API_BASE = "https://api.prod.whoop.com/developer/v1"
+API_BASE = "https://api.prod.whoop.com/developer/v2"
 SCOPES = "offline read:recovery read:sleep read:cycles read:profile read:body_measurement"
 
 CLIENT_ID = os.environ.get("WHOOP_CLIENT_ID", "")

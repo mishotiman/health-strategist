@@ -14,6 +14,9 @@ Endpoints:
 
 from __future__ import annotations
 
+import secrets
+
+import httpx
 from fastapi import FastAPI
 from fastapi.responses import RedirectResponse
 from pydantic import BaseModel
@@ -139,12 +142,28 @@ def get_metrics(user_id: int, type: str | None = None, limit: int = 100):
 # ---- WHOOP OAuth -----------------------------------------------------------
 @app.get("/whoop/connect")
 def whoop_connect(user_id: int):
-    # For the MVP, state carries the user id. A production app would use a
-    # random, signed state stored server-side to prevent CSRF.
-    return RedirectResponse(whoop.authorize_url(state=str(user_id)))
+    # WHOOP requires state >= 8 chars. We embed the user id plus a random token.
+    # (A production app would store the random half server-side and verify it
+    # on callback to fully prevent CSRF; the user id is embedded for the MVP.)
+    state = f"{user_id}.{secrets.token_urlsafe(8)}"
+    return RedirectResponse(whoop.authorize_url(state=state))
 
 
 @app.get("/whoop/callback")
-def whoop_callback(code: str, state: str):
-    user_id = int(state)
-    return whoop.connect_and_sync(user_id, code)
+def whoop_callback(code: str | None = None, state: str | None = None,
+                   error: str | None = None, error_description: str | None = None):
+    # Surface WHOOP's own OAuth error rather than a generic 422.
+    if error or not code:
+        return {
+            "whoop_oauth_error": error or "no authorization code in the request",
+            "description": error_description,
+            "hint": "Start at http://localhost:8000/whoop/connect?user_id=1 — "
+                    "don't open the callback URL directly.",
+        }
+    if not state:
+        return {"error": "missing state (user id)"}
+    user_id = int(state.split(".")[0])  # recover the user id from the state
+    try:
+        return whoop.connect_and_sync(user_id, code)
+    except httpx.HTTPStatusError as e:
+        return {"whoop_api_error": e.response.status_code, "detail": e.response.text[:500]}
