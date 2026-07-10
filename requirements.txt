@@ -14,3 +14,6 @@ openai  # fallback embeddings provider
 
 # PDF / ingestion (used from Week 1 Tue onward)
 pymupdf
+
+# Eval harness (Week 2)
+langsmith

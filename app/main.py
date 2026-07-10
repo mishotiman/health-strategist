@@ -9,26 +9,14 @@ Endpoints:
 
 from __future__ import annotations
 
-import anthropic
 from fastapi import FastAPI
 from pydantic import BaseModel
 
 from app.db import get_connection
+from app.qa import answer_question
 from app.rag import retrieve
 
 app = FastAPI(title="Personal Health Strategist")
-
-_claude = anthropic.Anthropic()  # reads ANTHROPIC_API_KEY
-
-SYSTEM_PROMPT = """You are a science-grounded health strategist.
-
-Answer ONLY using the numbered research passages provided in the user message.
-- Cite every claim with [n], where n is the passage number you drew it from.
-- If the passages do not cover the question, say so plainly. Do not answer from
-  outside knowledge.
-- You are not a doctor: never diagnose, and defer to a qualified professional
-  for anything that looks like a medical red flag.
-Be concise, practical, and honest about uncertainty in the evidence."""
 
 
 class AskRequest(BaseModel):
@@ -71,23 +59,8 @@ def search(req: AskRequest):
 @app.post("/ask")
 def ask(req: AskRequest):
     """Retrieve passages, then have Claude answer grounded in them with citations."""
-    chunks = retrieve(req.question, req.k)
-
-    context = "\n\n".join(
-        f"[{i + 1}] {c['content']}\n"
-        f"(Source: {c['title']}; {c['authors']}; {c['year']}. {c['source']})"
-        for i, c in enumerate(chunks)
-    )
-    user_message = f"Research passages:\n\n{context}\n\nQuestion: {req.question}"
-
-    message = _claude.messages.create(
-        model="claude-opus-4-8",
-        max_tokens=1024,
-        system=SYSTEM_PROMPT,
-        messages=[{"role": "user", "content": user_message}],
-    )
-    answer = "".join(block.text for block in message.content if block.type == "text")
-
+    result = answer_question(req.question, req.k)
+    chunks = result["chunks"]
     sources = [
         {
             "n": i + 1,
@@ -99,4 +72,4 @@ def ask(req: AskRequest):
         }
         for i, c in enumerate(chunks)
     ]
-    return {"question": req.question, "answer": answer, "sources": sources}
+    return {"question": req.question, "answer": result["answer"], "sources": sources}
