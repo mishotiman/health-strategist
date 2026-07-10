@@ -17,11 +17,11 @@ from __future__ import annotations
 import secrets
 
 import httpx
-from fastapi import FastAPI
+from fastapi import FastAPI, File, Form, UploadFile
 from fastapi.responses import RedirectResponse
 from pydantic import BaseModel
 
-from app import whoop
+from app import bloodwork, whoop
 from app.db import get_connection
 from app.ingestion import query_metrics, upsert_metrics
 from app.qa import answer_question
@@ -137,6 +137,12 @@ def ingest_metrics(req: MetricsRequest):
 @app.get("/metrics/{user_id}")
 def get_metrics(user_id: int, type: str | None = None, limit: int = 100):
     return {"user_id": user_id, "metrics": query_metrics(user_id, type, limit)}
+
+
+@app.post("/upload/bloodwork")
+async def upload_bloodwork(user_id: int = Form(...), file: UploadFile = File(...)):
+    """Upload a lab-report PDF; Claude extracts values into normalized metrics."""
+    return bloodwork.ingest_pdf(user_id, await file.read())
 
 
 # ---- WHOOP OAuth -----------------------------------------------------------
