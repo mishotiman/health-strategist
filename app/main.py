@@ -14,11 +14,12 @@ Endpoints:
 
 from __future__ import annotations
 
+import os
 import secrets
 
 import httpx
 from fastapi import FastAPI, File, Form, UploadFile
-from fastapi.responses import RedirectResponse
+from fastapi.responses import FileResponse, RedirectResponse
 from pydantic import BaseModel
 
 from app import agent, bloodwork, whoop
@@ -28,6 +29,14 @@ from app.qa import answer_question
 from app.rag import retrieve
 
 app = FastAPI(title="Personal Health Strategist")
+
+_STATIC_DIR = os.path.join(os.path.dirname(__file__), "static")
+
+
+@app.get("/")
+def index():
+    """Serve the thin chat UI."""
+    return FileResponse(os.path.join(_STATIC_DIR, "index.html"))
 
 
 # ---- request models --------------------------------------------------------
