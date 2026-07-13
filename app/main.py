@@ -21,7 +21,7 @@ from fastapi import FastAPI, File, Form, UploadFile
 from fastapi.responses import RedirectResponse
 from pydantic import BaseModel
 
-from app import bloodwork, whoop
+from app import agent, bloodwork, whoop
 from app.db import get_connection
 from app.ingestion import query_metrics, upsert_metrics
 from app.qa import answer_question
@@ -57,6 +57,12 @@ class MetricsRequest(BaseModel):
     user_id: int
     source: str
     records: list[MetricRecord]
+
+
+class ChatRequest(BaseModel):
+    user_id: int
+    message: str
+    thread_id: str | None = None
 
 
 # ---- basics ----------------------------------------------------------------
@@ -143,6 +149,13 @@ def get_metrics(user_id: int, type: str | None = None, limit: int = 100):
 async def upload_bloodwork(user_id: int = Form(...), file: UploadFile = File(...)):
     """Upload a lab-report PDF; Claude extracts values into normalized metrics."""
     return bloodwork.ingest_pdf(user_id, await file.read())
+
+
+# ---- agent -----------------------------------------------------------------
+@app.post("/chat")
+def chat(req: ChatRequest):
+    """Talk to the health-strategist agent (orchestrates the tools + memory)."""
+    return agent.run(req.user_id, req.message, req.thread_id)
 
 
 # ---- WHOOP OAuth -----------------------------------------------------------

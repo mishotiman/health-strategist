@@ -18,3 +18,7 @@ pymupdf
 
 # Eval harness (Week 2)
 langsmith
+
+# Agent (Week 4)
+langgraph
+langchain-anthropic
