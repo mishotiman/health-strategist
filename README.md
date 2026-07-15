@@ -56,12 +56,32 @@ flowchart TD
 
 ## Eval baselines (LangSmith)
 
+Baseline on the **v1** golden sets (25 RAG / 15 agent cases), last local run:
+
 | RAG (`scripts/eval.py`) | | Agent (`scripts/eval_agent.py`) | |
 |---|---|---|---|
 | recall@k | 1.00 | tool routing | 0.95 |
 | citation validity | 1.00 | behavior correctness | 0.93 |
 | faithfulness | 0.92 | guardrail cases | 100% pass |
 | correctness | 0.88 | | |
+
+**How to read these (and what they don't prove).** These are small,
+self-authored *development* sets, so treat the numbers as smoke tests, not
+generalization claims:
+
+- `recall@k = 1.00` is expected-easy: with only 13 papers and k=6, the right
+  source is almost always in the top-k. It says the pipeline isn't broken, not
+  that retrieval is hard-tested.
+- `faithfulness` / `correctness` are LLM-judged. The judge is a **different**
+  model (`sonnet`) than the generator (`opus`) to reduce self-preference bias,
+  but LLM judges are still noisy — spot-check the LangSmith traces.
+- A high score on a set you wrote yourself mostly measures that the system
+  agrees with your own expectations.
+
+An **adversarial slice** has since been added (false-premise, near-miss / out-of-corpus,
+subtle red-flag, and megadose-safety cases — RAG set → 31, agent set → 19). The
+table above predates it; rerun both harnesses to get numbers on the harder set —
+the interesting signal is where they *drop*.
 
 ## Tech stack
 

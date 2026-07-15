@@ -29,13 +29,15 @@ from langchain_core.tools import tool
 from langgraph.checkpoint.memory import MemorySaver
 from langgraph.prebuilt import create_react_agent
 
+from app.citations import format_chunks_with_citations
 from app.db import get_connection
 from app.ingestion import query_metrics
+from app.prompts import GUARDRAILS
 from app.rag import retrieve
 
 MODEL = "claude-opus-4-8"
 
-SYSTEM_PROMPT = """You are the user's Personal Health Strategist. You turn their \
+SYSTEM_PROMPT = f"""You are the user's Personal Health Strategist. You turn their \
 own body data plus peer-reviewed sports-science research into practical, \
 personalized guidance.
 
@@ -51,11 +53,7 @@ the corpus doesn't cover something, say so instead of guessing.
 lead with the direct answer first — the actual numbers or trend — then add any \
 research or context after.
 
-GUARDRAILS (always apply, no exceptions):
-- You are not a doctor. Never diagnose.
-- If the user reports a possible medical red flag (e.g. chest pain, fainting, \
-severe or unusual symptoms), stop and advise them to consult a qualified \
-professional or seek urgent care.
+{GUARDRAILS}
 Be concise, practical, and honest about uncertainty."""
 
 
@@ -74,18 +72,7 @@ def knowledge_search(query: str, config: RunnableConfig = None) -> str:
     reg = ((config or {}).get("configurable") or {}).get("citations")
     if reg is None:
         reg = []
-    url_to_n = {c["url"]: c["n"] for c in reg}
-
-    lines = []
-    for ch in chunks:
-        url = ch["source"]
-        n = url_to_n.get(url)
-        if n is None:
-            n = len(reg) + 1
-            reg.append({"n": n, "title": ch["title"], "url": url})
-            url_to_n[url] = n
-        lines.append(f"[{n}] {ch['content']}\n(Source: {ch['title']}, {ch['year']})")
-    return "\n\n".join(lines)
+    return format_chunks_with_citations(chunks, reg)
 
 
 @tool
@@ -118,7 +105,7 @@ def memory(config: RunnableConfig = None) -> str:
 
 
 _llm = ChatAnthropic(model=MODEL, max_tokens=2000)
-_checkpointer = MemorySaver()
+_checkpointer = MemorySaver() # persist conversation state per thread in RAM, so the agent remembers earlier turns
 _agent = create_react_agent(
     _llm,
     tools=[knowledge_search, health_data, memory],

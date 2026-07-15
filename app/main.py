@@ -15,7 +15,6 @@ Endpoints:
 from __future__ import annotations
 
 import os
-import secrets
 
 import httpx
 from fastapi import FastAPI, File, Form, UploadFile
@@ -172,10 +171,10 @@ def chat(req: ChatRequest):
 # ---- WHOOP OAuth -----------------------------------------------------------
 @app.get("/whoop/connect")
 def whoop_connect(user_id: int):
-    # WHOOP requires state >= 8 chars. We embed the user id plus a random token.
-    # (A production app would store the random half server-side and verify it
-    # on callback to fully prevent CSRF; the user id is embedded for the MVP.)
-    state = f"{user_id}.{secrets.token_urlsafe(8)}"
+    # state = "<user_id>.<random CSRF token>". The token is stored server-side
+    # and verified on callback, so a forged callback can't bind someone else's
+    # authorization code to this user.
+    state = whoop.new_oauth_state(user_id)
     return RedirectResponse(whoop.authorize_url(state=state))
 
 
@@ -203,7 +202,9 @@ def whoop_callback(code: str | None = None, state: str | None = None,
         }
     if not state:
         return {"error": "missing state (user id)"}
-    user_id = int(state.split(".")[0])  # recover the user id from the state
+    user_id = whoop.verify_oauth_state(state)  # checks the CSRF token, one-time use
+    if user_id is None:
+        return {"error": "invalid or expired OAuth state — restart at /whoop/connect"}
     try:
         return whoop.connect_and_sync(user_id, code)
     except httpx.HTTPStatusError as e:

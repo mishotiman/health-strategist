@@ -36,7 +36,7 @@ except ImportError:  # pragma: no cover
 from app.agent import run as run_agent
 
 GOLDEN = os.path.join(os.path.dirname(__file__), "..", "data", "eval", "agent_set.jsonl")
-DATASET_NAME = "phs-agent-v1"
+DATASET_NAME = "phs-agent-v2"  # v2 adds the adversarial slice (see data/eval/agent_set.jsonl)
 JUDGE_MODEL = "claude-sonnet-5"   # cheaper than opus; pass/fail judging
 EVAL_USER_ID = 1                  # the test user with real WHOOP + bloodwork data
 
@@ -141,7 +141,7 @@ def main() -> None:
         target,
         data=DATASET_NAME,
         evaluators=[tool_correctness, behavior_correctness],
-        experiment_prefix="phs-agent-baseline",
+        experiment_prefix="phs-agent-baseline-v2",
         client=ls,
         max_concurrency=2,
     )

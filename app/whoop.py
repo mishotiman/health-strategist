@@ -14,6 +14,7 @@ from __future__ import annotations
 
 import datetime as dt
 import os
+import secrets
 from urllib.parse import urlencode
 
 import httpx
@@ -42,6 +43,49 @@ def authorize_url(state: str) -> str:
         "scope": SCOPES,
         "state": state,
     })
+
+
+def new_oauth_state(user_id: int) -> str:
+    """Mint an OAuth `state`: the user id plus a random CSRF token. The token is
+    stored server-side (below) and verified on callback, so a forged callback
+    with someone else's code can't bind it to this user."""
+    token = secrets.token_urlsafe(24)
+    _store_oauth_state(user_id, token)
+    return f"{user_id}.{token}"
+
+
+def _store_oauth_state(user_id: int, token: str) -> None:
+    with get_connection() as conn, conn.cursor() as cur:
+        cur.execute(
+            """
+            INSERT INTO whoop_oauth_states (user_id, state_token, created_at)
+            VALUES (%s, %s, now())
+            ON CONFLICT (user_id) DO UPDATE SET
+                state_token = EXCLUDED.state_token, created_at = now()
+            """,
+            (user_id, token),
+        )
+        conn.commit()
+
+
+def verify_oauth_state(state: str) -> int | None:
+    """Validate a callback `state` and return the user id if it matches the
+    token we stored, else None. The token is single-use: consumed on success."""
+    user_part, _, token = (state or "").partition(".")
+    if not user_part.isdigit() or not token:
+        return None
+    user_id = int(user_part)
+    with get_connection() as conn, conn.cursor() as cur:
+        cur.execute(
+            "SELECT state_token FROM whoop_oauth_states WHERE user_id = %s",
+            (user_id,),
+        )
+        row = cur.fetchone()
+        if not row or not secrets.compare_digest(row[0], token):
+            return None
+        cur.execute("DELETE FROM whoop_oauth_states WHERE user_id = %s", (user_id,))
+        conn.commit()
+    return user_id
 
 
 def _token_request(data: dict) -> dict:
@@ -99,6 +143,58 @@ def _valid_access_token(user_id: int) -> str:
 # --------------------------------------------------------------------------- #
 # Sync — map WHOOP JSON to canonical metrics
 # --------------------------------------------------------------------------- #
+# WHOOP score key -> (canonical metric_type, decimal places)
+_RECOVERY_MAP = [
+    ("recovery_score", "recovery_score", 0),
+    ("hrv_rmssd_milli", "hrv_rmssd", 1),
+    ("resting_heart_rate", "resting_hr", 0),
+    ("spo2_percentage", "spo2", 1),
+    ("skin_temp_celsius", "skin_temp", 1),
+]
+_SLEEP_STAGE_KEYS = (
+    "total_light_sleep_time_milli",
+    "total_slow_wave_sleep_time_milli",
+    "total_rem_sleep_time_milli",
+)
+
+
+def parse_recovery(records: list[dict]) -> list[dict]:
+    """Map WHOOP /recovery records to canonical metric rows. Pure: no I/O."""
+    out: list[dict] = []
+    for rec in records:
+        score = rec.get("score") or {}
+        date = (rec.get("created_at") or "")[:10]
+        if not date:
+            continue
+        for whoop_key, canonical, rnd in _RECOVERY_MAP:
+            if score.get(whoop_key) is not None:
+                out.append({"date": date, "metric_type": canonical,
+                            "value": round(float(score[whoop_key]), rnd)})
+    return out
+
+
+def parse_sleep(records: list[dict]) -> list[dict]:
+    """Map WHOOP /activity/sleep records to canonical metric rows. Pure: no I/O."""
+    out: list[dict] = []
+    for s in records:
+        score = s.get("score") or {}
+        date = (s.get("start") or "")[:10]
+        if not date:
+            continue
+        stages = score.get("stage_summary") or {}
+        asleep_ms = sum(stages.get(k, 0) or 0 for k in _SLEEP_STAGE_KEYS)
+        if asleep_ms:
+            out.append({"date": date, "metric_type": "sleep_hours",
+                        "value": round(asleep_ms / 3_600_000, 2)})
+        if score.get("sleep_efficiency_percentage") is not None:
+            out.append({"date": date, "metric_type": "sleep_efficiency",
+                        "value": round(float(score["sleep_efficiency_percentage"]), 1)})
+        if score.get("respiratory_rate") is not None:
+            out.append({"date": date, "metric_type": "respiratory_rate",
+                        "value": round(float(score["respiratory_rate"]), 1)})
+    return out
+
+
 def _get(path: str, token: str, params: dict) -> dict:
     resp = httpx.get(f"{API_BASE}{path}", headers={"Authorization": f"Bearer {token}"},
                      params=params, timeout=30)
@@ -114,46 +210,8 @@ def connect_and_sync(user_id: int, code: str) -> dict:
 
 def sync(user_id: int, limit: int = 25) -> dict:
     token = _valid_access_token(user_id)
-    records: list[dict] = []
-
-    # Recovery: recovery score, HRV, resting HR, SpO2, skin temp
-    for rec in _get("/recovery", token, {"limit": limit}).get("records", []):
-        score = rec.get("score") or {}
-        date = (rec.get("created_at") or "")[:10]
-        if not date:
-            continue
-        for whoop_key, canonical, rnd in [
-            ("recovery_score", "recovery_score", 0),
-            ("hrv_rmssd_milli", "hrv_rmssd", 1),
-            ("resting_heart_rate", "resting_hr", 0),
-            ("spo2_percentage", "spo2", 1),
-            ("skin_temp_celsius", "skin_temp", 1),
-        ]:
-            if score.get(whoop_key) is not None:
-                records.append({"date": date, "metric_type": canonical,
-                                "value": round(float(score[whoop_key]), rnd)})
-
-    # Sleep: hours asleep, efficiency, respiratory rate
-    for s in _get("/activity/sleep", token, {"limit": limit}).get("records", []):
-        score = s.get("score") or {}
-        date = (s.get("start") or "")[:10]
-        if not date:
-            continue
-        stages = score.get("stage_summary") or {}
-        asleep_ms = sum(stages.get(k, 0) or 0 for k in (
-            "total_light_sleep_time_milli",
-            "total_slow_wave_sleep_time_milli",
-            "total_rem_sleep_time_milli",
-        ))
-        if asleep_ms:
-            records.append({"date": date, "metric_type": "sleep_hours",
-                            "value": round(asleep_ms / 3_600_000, 2)})
-        if score.get("sleep_efficiency_percentage") is not None:
-            records.append({"date": date, "metric_type": "sleep_efficiency",
-                            "value": round(float(score["sleep_efficiency_percentage"]), 1)})
-        if score.get("respiratory_rate") is not None:
-            records.append({"date": date, "metric_type": "respiratory_rate",
-                            "value": round(float(score["respiratory_rate"]), 1)})
+    records = parse_recovery(_get("/recovery", token, {"limit": limit}).get("records", []))
+    records += parse_sleep(_get("/activity/sleep", token, {"limit": limit}).get("records", []))
 
     written = upsert_metrics(user_id, "whoop", records)
     return {"source": "whoop", "metrics_written": written,

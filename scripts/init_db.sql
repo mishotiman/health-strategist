@@ -33,6 +33,14 @@ CREATE TABLE IF NOT EXISTS whoop_connections (
     updated_at    TIMESTAMPTZ NOT NULL DEFAULT now()
 );
 
+-- Pending OAuth CSRF tokens (one in-flight authorization per user). The token
+-- is verified on /whoop/callback and deleted on use.
+CREATE TABLE IF NOT EXISTS whoop_oauth_states (
+    user_id     BIGINT PRIMARY KEY REFERENCES users(id) ON DELETE CASCADE,
+    state_token TEXT NOT NULL,
+    created_at  TIMESTAMPTZ NOT NULL DEFAULT now()
+);
+
 -- Normalized wearable / bloodwork metrics ("any source, one schema") ------
 CREATE TABLE IF NOT EXISTS health_metrics (
     id          BIGSERIAL PRIMARY KEY,

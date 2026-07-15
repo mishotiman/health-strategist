@@ -9,7 +9,9 @@ class Settings(BaseSettings):
 
     anthropic_api_key: str = ""
     voyage_api_key: str = ""
-    openai_api_key: str = ""
+    # Note: OpenAI is a corpus-embedding fallback used directly by
+    # scripts/embed_chunks.py (reads OPENAI_API_KEY from the environment). It is
+    # intentionally not surfaced here because nothing at runtime reads it.
 
     whoop_client_id: str = ""
     whoop_client_secret: str = ""

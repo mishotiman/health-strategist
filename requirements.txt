@@ -22,3 +22,6 @@ langsmith
 # Agent (Week 4)
 langgraph
 langchain-anthropic
+
+# Tests
+pytest

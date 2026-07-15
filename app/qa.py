@@ -5,20 +5,21 @@ from __future__ import annotations
 
 import anthropic
 
+from app.prompts import GUARDRAILS
 from app.rag import retrieve
 
 _claude = anthropic.Anthropic()  # reads ANTHROPIC_API_KEY
 
 GEN_MODEL = "claude-opus-4-8"
 
-SYSTEM_PROMPT = """You are a science-grounded health strategist.
+SYSTEM_PROMPT = f"""You are a science-grounded health strategist.
 
 Answer ONLY using the numbered research passages provided in the user message.
 - Cite every claim with [n], where n is the passage number you drew it from.
 - If the passages do not cover the question, say so plainly. Do not answer from
   outside knowledge.
-- You are not a doctor: never diagnose, and defer to a qualified professional
-  for anything that looks like a medical red flag.
+
+{GUARDRAILS}
 Be concise, practical, and honest about uncertainty in the evidence."""
 
 

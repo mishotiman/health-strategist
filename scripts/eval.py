@@ -34,8 +34,11 @@ except ImportError:  # pragma: no cover
 from app.qa import answer_question
 
 GOLDEN = os.path.join(os.path.dirname(__file__), "..", "data", "eval", "golden_set.jsonl")
-DATASET_NAME = "phs-golden-v1"
-JUDGE_MODEL = "claude-opus-4-8"
+DATASET_NAME = "phs-golden-v2"  # v2 adds the adversarial slice (see data/eval/golden_set.jsonl)
+# Judge with a DIFFERENT model than the generator (app.qa uses opus-4-8). A model
+# grading its own family tends to score itself up (self-preference bias); sonnet
+# keeps the faithfulness/correctness judgments more independent.
+JUDGE_MODEL = "claude-sonnet-5"
 
 # This LangSmith workspace lives in the EU region; the SDK defaults to US (403).
 # setdefault so a LANGSMITH_ENDPOINT in .env still wins if set later.
@@ -160,7 +163,7 @@ def main() -> None:
         target,
         data=DATASET_NAME,
         evaluators=[recall_at_k, citation_validity, faithfulness, correctness],
-        experiment_prefix="phs-baseline",
+        experiment_prefix="phs-baseline-v2",
         client=ls,
         max_concurrency=4,
     )
