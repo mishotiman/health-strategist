@@ -4,22 +4,44 @@
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>Personal Health Strategist</title>
+<script src="/static/marked.min.js"></script>
 <style>
   :root { --bg:#0f1720; --panel:#16212e; --line:#26333f; --teal:#2dd4bf; --ink:#e6edf3; --dim:#8aa0b2; }
   * { box-sizing:border-box; }
   body { margin:0; font-family:system-ui,-apple-system,Segoe UI,Roboto,sans-serif;
          background:var(--bg); color:var(--ink); height:100vh; display:flex; flex-direction:column; }
-  header { padding:14px 20px; border-bottom:1px solid var(--line); display:flex; align-items:center; gap:10px; }
+  header { padding:12px 20px; border-bottom:1px solid var(--line); display:flex; align-items:center; gap:10px; }
   header h1 { font-size:16px; margin:0; font-weight:600; }
   header .dot { width:9px; height:9px; border-radius:50%; background:var(--teal); }
   header .sub { color:var(--dim); font-size:12px; margin-left:auto; }
-  #chat { flex:1; overflow-y:auto; padding:20px; display:flex; flex-direction:column; gap:14px; max-width:760px; width:100%; margin:0 auto; }
-  .msg { padding:12px 15px; border-radius:12px; line-height:1.5; white-space:pre-wrap; max-width:88%; }
-  .user { align-self:flex-end; background:#1f3a4d; }
+  #status { font-size:12px; color:var(--dim); padding:6px 20px; border-bottom:1px solid var(--line); min-height:0; transition:opacity .4s; }
+  #status.ok { color:var(--teal); }
+  #chat { flex:1; overflow-y:auto; padding:20px; display:flex; flex-direction:column; gap:14px; max-width:780px; width:100%; margin:0 auto; }
+  .msg { padding:12px 16px; border-radius:12px; line-height:1.55; max-width:90%; }
+  .user { align-self:flex-end; background:#1f3a4d; white-space:pre-wrap; }
   .bot { align-self:flex-start; background:var(--panel); border:1px solid var(--line); }
+  /* markdown inside bot messages */
+  .bot > :first-child { margin-top:0; } .bot > :last-child { margin-bottom:0; }
+  .bot h1,.bot h2,.bot h3 { margin:14px 0 6px; line-height:1.3; }
+  .bot h1 { font-size:19px; } .bot h2 { font-size:17px; } .bot h3 { font-size:15px; }
+  .bot p { margin:8px 0; }
+  .bot ul,.bot ol { margin:8px 0; padding-left:22px; }
+  .bot li { margin:3px 0; }
+  .bot strong { color:#fff; }
+  .bot a { color:var(--teal); text-decoration:none; }
+  .bot a:hover { text-decoration:underline; }
+  .bot code { background:#0b131b; border:1px solid var(--line); border-radius:5px; padding:1px 5px; font-size:13px; }
+  .bot pre { background:#0b131b; border:1px solid var(--line); border-radius:8px; padding:12px; overflow-x:auto; }
+  .bot pre code { border:none; padding:0; }
+  .bot table { border-collapse:collapse; margin:10px 0; font-size:14px; display:block; overflow-x:auto; }
+  .bot th,.bot td { border:1px solid var(--line); padding:6px 10px; text-align:left; }
+  .bot th { background:#0d1b26; }
+  .sources { align-self:flex-start; font-size:12px; color:var(--dim); margin-top:-8px; max-width:90%; }
+  .sources a { color:var(--dim); }
+  .sources a:hover { color:var(--teal); }
   .tools { align-self:flex-start; font-size:11px; color:var(--dim); margin-top:-8px; }
   .tools span { background:#0d2b28; color:var(--teal); border-radius:6px; padding:2px 7px; margin-right:5px; }
-  form { display:flex; gap:10px; padding:16px 20px; border-top:1px solid var(--line); max-width:760px; width:100%; margin:0 auto; }
+  form { display:flex; gap:10px; padding:16px 20px; border-top:1px solid var(--line); max-width:780px; width:100%; margin:0 auto; }
   input { flex:1; background:var(--panel); border:1px solid var(--line); color:var(--ink); border-radius:10px; padding:12px 14px; font-size:15px; }
   input:focus { outline:none; border-color:var(--teal); }
   button { background:var(--teal); color:#04201c; border:none; border-radius:10px; padding:0 20px; font-weight:600; cursor:pointer; }
@@ -33,6 +55,7 @@
   <h1>Personal Health Strategist</h1>
   <span class="sub">agentic RAG · WHOOP + bloodwork · cited</span>
 </header>
+<div id="status"></div>
 
 <div id="chat">
   <div class="hint">Ask about your training, recovery, sleep, supplements, or bloodwork.<br>
@@ -49,42 +72,90 @@
   const form = document.getElementById('form');
   const input = document.getElementById('input');
   const send = document.getElementById('send');
+  const statusEl = document.getElementById('status');
   const threadId = 'web-' + Math.random().toString(36).slice(2, 10);
   const USER_ID = 1;
 
-  function add(cls, text) {
+  marked.setOptions({ breaks: true });
+
+  // ---- WHOOP auto-sync on open -------------------------------------------
+  (async () => {
+    statusEl.textContent = 'Syncing WHOOP…';
+    try {
+      const r = await fetch('/whoop/sync?user_id=' + USER_ID);
+      const d = await r.json();
+      if (d.metrics_written != null) {
+        statusEl.textContent = '✓ WHOOP synced — ' + d.metrics_written + ' metrics up to date';
+        statusEl.className = 'ok';
+        setTimeout(() => { statusEl.style.opacity = '0'; }, 4000);
+      } else {
+        // not connected, or token expired / refresh failed → prompt reconnect
+        statusEl.innerHTML = 'WHOOP session inactive — <a href="/whoop/connect?user_id=' +
+          USER_ID + '" style="color:var(--teal)">reconnect to refresh your data</a>.';
+      }
+    } catch (e) { statusEl.textContent = ''; }
+  })();
+
+  // ---- render helpers -----------------------------------------------------
+  function addUser(text) {
     const el = document.createElement('div');
-    el.className = 'msg ' + cls;
+    el.className = 'msg user';
     el.textContent = text;
     chat.appendChild(el);
-    chat.scrollTop = chat.scrollHeight;
+  }
+  function addBot() {
+    const el = document.createElement('div');
+    el.className = 'msg bot';
+    el.textContent = 'Thinking…';
+    chat.appendChild(el);
     return el;
   }
+  function linkifyCitations(md, sources) {
+    if (!sources || !sources.length) return md;
+    const map = {};
+    sources.forEach(s => { map[s.n] = s.url; });
+    // turn [3] into a markdown link [[3]](url) so it renders as a clickable [3]
+    return md.replace(/\[(\d+)\]/g, (m, n) => map[n] ? `[[${n}]](${map[n]})` : m);
+  }
+  function renderBot(el, data) {
+    const md = linkifyCitations(data.answer || JSON.stringify(data), data.sources);
+    el.innerHTML = marked.parse(md);
+    el.querySelectorAll('a').forEach(a => { a.target = '_blank'; a.rel = 'noopener'; });
+    if (data.sources && data.sources.length) {
+      const s = document.createElement('div');
+      s.className = 'sources';
+      s.innerHTML = 'sources: ' + data.sources
+        .map(x => `<a href="${x.url}" target="_blank" rel="noopener">[${x.n}] ${x.title.slice(0,42)}${x.title.length>42?'…':''}</a>`)
+        .join(' · ');
+      chat.appendChild(s);
+    }
+    if (data.tools_used && data.tools_used.length) {
+      const t = document.createElement('div');
+      t.className = 'tools';
+      t.innerHTML = 'used: ' + [...new Set(data.tools_used)].map(x => '<span>' + x + '</span>').join('');
+      chat.appendChild(t);
+    }
+  }
 
+  // ---- chat ---------------------------------------------------------------
   form.addEventListener('submit', async (e) => {
     e.preventDefault();
     const q = input.value.trim();
     if (!q) return;
     input.value = '';
     send.disabled = true;
-    add('user', q);
-    const thinking = add('bot', 'Thinking…');
+    addUser(q);
+    const bot = addBot();
+    chat.scrollTop = chat.scrollHeight;
     try {
       const res = await fetch('/chat', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ user_id: USER_ID, message: q, thread_id: threadId })
       });
-      const data = await res.json();
-      thinking.textContent = data.answer || JSON.stringify(data);
-      if (data.tools_used && data.tools_used.length) {
-        const t = document.createElement('div');
-        t.className = 'tools';
-        t.innerHTML = 'used: ' + [...new Set(data.tools_used)].map(x => '<span>' + x + '</span>').join('');
-        chat.appendChild(t);
-      }
+      renderBot(bot, await res.json());
     } catch (err) {
-      thinking.textContent = 'Error: ' + err;
+      bot.textContent = 'Error: ' + err;
     } finally {
       send.disabled = false;
       input.focus();

@@ -20,6 +20,7 @@ import secrets
 import httpx
 from fastapi import FastAPI, File, Form, UploadFile
 from fastapi.responses import FileResponse, RedirectResponse
+from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel
 
 from app import agent, bloodwork, whoop
@@ -31,6 +32,7 @@ from app.rag import retrieve
 app = FastAPI(title="Personal Health Strategist")
 
 _STATIC_DIR = os.path.join(os.path.dirname(__file__), "static")
+app.mount("/static", StaticFiles(directory=_STATIC_DIR), name="static")
 
 
 @app.get("/")
@@ -175,6 +177,17 @@ def whoop_connect(user_id: int):
     # on callback to fully prevent CSRF; the user id is embedded for the MVP.)
     state = f"{user_id}.{secrets.token_urlsafe(8)}"
     return RedirectResponse(whoop.authorize_url(state=state))
+
+
+@app.get("/whoop/sync")
+def whoop_sync(user_id: int):
+    """Pull the latest WHOOP data for a connected user (called on app open)."""
+    try:
+        return whoop.sync(user_id)
+    except RuntimeError as e:            # not connected yet
+        return {"connected": False, "detail": str(e)}
+    except httpx.HTTPStatusError as e:   # token/refresh/API problem
+        return {"connected": True, "error": e.response.status_code}
 
 
 @app.get("/whoop/callback")

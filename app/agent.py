@@ -60,17 +60,32 @@ Be concise, practical, and honest about uncertainty."""
 
 
 @tool
-def knowledge_search(query: str) -> str:
+def knowledge_search(query: str, config: RunnableConfig = None) -> str:
     """Search the peer-reviewed sports-science research corpus. Use for any claim
     about training, nutrition, supplements, sleep, recovery, or stress. Returns
-    passages, each with its source citation."""
+    passages, each prefixed with a stable [n] citation number — cite claims with
+    that number."""
     chunks = retrieve(query, k=6)
     if not chunks:
         return "No relevant passages found in the corpus."
-    return "\n\n".join(
-        f"[{i + 1}] {c['content']}\n(Source: {c['title']}, {c['year']}. {c['source']})"
-        for i, c in enumerate(chunks)
-    )
+
+    # A per-turn registry (shared via config) gives each unique source a stable
+    # global citation number, so [n] means the same paper across the whole turn.
+    reg = ((config or {}).get("configurable") or {}).get("citations")
+    if reg is None:
+        reg = []
+    url_to_n = {c["url"]: c["n"] for c in reg}
+
+    lines = []
+    for ch in chunks:
+        url = ch["source"]
+        n = url_to_n.get(url)
+        if n is None:
+            n = len(reg) + 1
+            reg.append({"n": n, "title": ch["title"], "url": url})
+            url_to_n[url] = n
+        lines.append(f"[{n}] {ch['content']}\n(Source: {ch['title']}, {ch['year']})")
+    return "\n\n".join(lines)
 
 
 @tool
@@ -120,7 +135,9 @@ def _text(content) -> str:
 
 def run(user_id: int, message: str, thread_id: str | None = None) -> dict:
     thread_id = thread_id or f"user-{user_id}"
-    config = {"configurable": {"user_id": user_id, "thread_id": thread_id}}
+    citations: list[dict] = []  # filled by knowledge_search during this turn
+    config = {"configurable": {"user_id": user_id, "thread_id": thread_id,
+                               "citations": citations}}
     result = _agent.invoke({"messages": [HumanMessage(content=message)]}, config=config)
 
     messages = result["messages"]
@@ -133,4 +150,5 @@ def run(user_id: int, message: str, thread_id: str | None = None) -> dict:
         "answer": _text(messages[-1].content),
         "thread_id": thread_id,
         "tools_used": tools_used,
+        "sources": citations,  # [{n, title, url}] for linking [n] citations
     }
