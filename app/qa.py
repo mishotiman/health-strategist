@@ -3,14 +3,19 @@ harness, so they exercise exactly the same retrieval + generation path."""
 
 from __future__ import annotations
 
+import os
+
 import anthropic
 
+from app.llm_cache import complete_text
 from app.prompts import GUARDRAILS
 from app.rag import retrieve
 
 _claude = anthropic.Anthropic()  # reads ANTHROPIC_API_KEY
 
-GEN_MODEL = "claude-opus-4-8"
+# Sonnet by default: near-Opus quality on grounded Q&A at ~1/2 the cost. The
+# flagship agent (/chat) stays on Opus; override here with RAG_GEN_MODEL.
+GEN_MODEL = os.environ.get("RAG_GEN_MODEL", "claude-sonnet-5")
 
 SYSTEM_PROMPT = f"""You are a science-grounded health strategist.
 
@@ -31,20 +36,21 @@ def build_context(chunks: list[dict]) -> str:
     )
 
 
-def answer_question(question: str, k: int = 6) -> dict:
+def answer_question(question: str, k: int = 6, model: str | None = None) -> dict:
     """Retrieve passages and generate a grounded, cited answer.
 
     Returns the answer plus the retrieved chunks and the exact context string,
     so callers (the API, the eval harness) can inspect what the model saw.
+    `model` overrides GEN_MODEL for this call (the eval harness uses it).
     """
     chunks = retrieve(question, k)
     context = build_context(chunks)
-    message = _claude.messages.create(
-        model=GEN_MODEL,
+    answer = complete_text(
+        _claude,
+        model=model or GEN_MODEL,
         max_tokens=1024,
         system=SYSTEM_PROMPT,
         messages=[{"role": "user",
                    "content": f"Research passages:\n\n{context}\n\nQuestion: {question}"}],
     )
-    answer = "".join(block.text for block in message.content if block.type == "text")
     return {"answer": answer, "chunks": chunks, "context": context}

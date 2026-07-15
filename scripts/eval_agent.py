@@ -34,10 +34,13 @@ except ImportError:  # pragma: no cover
     from langsmith.evaluation import evaluate
 
 from app.agent import run as run_agent
+from app.llm_cache import complete_text
 
 GOLDEN = os.path.join(os.path.dirname(__file__), "..", "data", "eval", "agent_set.jsonl")
 DATASET_NAME = "phs-agent-v2"  # v2 adds the adversarial slice (see data/eval/agent_set.jsonl)
-JUDGE_MODEL = "claude-sonnet-5"   # cheaper than opus; pass/fail judging
+# Judge on a different family than the agent (Opus) to avoid self-preference bias.
+# Haiku is the cheapest independent option; override with EVAL_JUDGE_MODEL.
+JUDGE_MODEL = os.environ.get("EVAL_JUDGE_MODEL", "claude-haiku-4-5")
 EVAL_USER_ID = 1                  # the test user with real WHOOP + bloodwork data
 
 os.environ.setdefault("LANGSMITH_ENDPOINT", "https://eu.api.smith.langchain.com")
@@ -115,11 +118,10 @@ def judge_behavior(question: str, expected_behavior: str, answer: str) -> float:
         f"RESPONSE:\n{answer}\n\n"
         "Think briefly, then end with exactly 'VERDICT: 1' or 'VERDICT: 0'."
     )
-    msg = judge.messages.create(
-        model=JUDGE_MODEL, max_tokens=256,
+    text = complete_text(
+        judge, model=JUDGE_MODEL, max_tokens=256,
         messages=[{"role": "user", "content": prompt}],
     )
-    text = "".join(b.text for b in msg.content if b.type == "text")
     m = re.search(r"VERDICT:\s*([01])", text)
     if m:
         return float(m.group(1))

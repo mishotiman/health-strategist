@@ -72,21 +72,36 @@ generalization claims:
 - `recall@k = 1.00` is expected-easy: with only 13 papers and k=6, the right
   source is almost always in the top-k. It says the pipeline isn't broken, not
   that retrieval is hard-tested.
-- `faithfulness` / `correctness` are LLM-judged. The judge is a **different**
-  model (`sonnet`) than the generator (`opus`) to reduce self-preference bias,
-  but LLM judges are still noisy — spot-check the LangSmith traces.
+- `faithfulness` / `correctness` are LLM-judged by a **different family** than
+  the generator (`claude-haiku-4-5` by default — independent of both the Sonnet
+  RAG generator and the Opus agent) to reduce self-preference bias. LLM judges
+  are still noisy — spot-check the LangSmith traces, and use a stronger judge
+  (`EVAL_JUDGE_MODEL=claude-opus-4-8`) for a headline number.
 - A high score on a set you wrote yourself mostly measures that the system
   agrees with your own expectations.
 
-An **adversarial slice** has since been added (false-premise, near-miss / out-of-corpus,
-subtle red-flag, and megadose-safety cases — RAG set → 31, agent set → 19). The
-table above predates it; rerun both harnesses to get numbers on the harder set —
-the interesting signal is where they *drop*.
+The table above predates two changes and should be refreshed on the next run:
+an **adversarial slice** (false-premise, near-miss / out-of-corpus, subtle
+red-flag, and megadose-safety cases — RAG set → 31, agent set → 19), and the RAG
+generator moving from Opus to **Sonnet** (the default; see below). The interesting
+signal on the harder set is where the numbers *drop*.
+
+### Running the harnesses cheaply
+
+- **Free retrieval tier.** `scripts/eval.py --retrieval-only` scores `recall@k`
+  over Voyage retrieval with **no Anthropic spend** (embeddings are a separate
+  provider) — use it to iterate on retrieval/chunking for free.
+- **Response cache.** Set `LLM_CACHE_DIR=.llm-cache` to memoize generations and
+  judge verdicts by request hash, so re-runs while you tweak scoring cost nothing
+  (and become deterministic). Leave unset in production.
+- **Model config.** `RAG_GEN_MODEL`, `AGENT_MODEL`, `EVAL_GEN_MODEL`, and
+  `EVAL_JUDGE_MODEL` (see `.env.example`) let you run cheap smoke passes on Haiku
+  and reserve Opus for reported baselines.
 
 ## Tech stack
 
-FastAPI · PostgreSQL + pgvector · Claude (Opus 4.8 agent/answers, Sonnet 5 / Haiku for
-extraction & judging) · Voyage `voyage-3` embeddings · LangGraph + LangChain + LangSmith ·
+FastAPI · PostgreSQL + pgvector · Claude (Opus 4.8 agent, Sonnet 5 RAG answers +
+bloodwork extraction, Haiku 4.5 eval judge) · Voyage `voyage-3` embeddings · LangGraph + LangChain + LangSmith ·
 WHOOP OAuth2 · PyMuPDF · Docker Compose · a thin static chat UI (Next.js is a documented
 future upgrade).
 

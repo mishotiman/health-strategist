@@ -35,7 +35,9 @@ from app.ingestion import query_metrics
 from app.prompts import GUARDRAILS
 from app.rag import retrieve
 
-MODEL = "claude-opus-4-8"
+# Opus is the flagship agent. Override with AGENT_MODEL (e.g. claude-haiku-4-5)
+# for cheap smoke runs of the agent eval.
+MODEL = os.environ.get("AGENT_MODEL", "claude-opus-4-8")
 
 SYSTEM_PROMPT = f"""You are the user's Personal Health Strategist. You turn their \
 own body data plus peer-reviewed sports-science research into practical, \

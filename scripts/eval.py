@@ -31,14 +31,21 @@ try:  # import location moved across langsmith versions
 except ImportError:  # pragma: no cover
     from langsmith.evaluation import evaluate
 
-from app.qa import answer_question
+from app.llm_cache import complete_text
+from app.qa import GEN_MODEL as RAG_GEN_MODEL, answer_question
+from app.rag import retrieve
 
 GOLDEN = os.path.join(os.path.dirname(__file__), "..", "data", "eval", "golden_set.jsonl")
 DATASET_NAME = "phs-golden-v2"  # v2 adds the adversarial slice (see data/eval/golden_set.jsonl)
-# Judge with a DIFFERENT model than the generator (app.qa uses opus-4-8). A model
-# grading its own family tends to score itself up (self-preference bias); sonnet
-# keeps the faithfulness/correctness judgments more independent.
-JUDGE_MODEL = "claude-sonnet-5"
+
+# Generator under test. Defaults to whatever /ask serves (RAG_GEN_MODEL, i.e.
+# Sonnet); override with EVAL_GEN_MODEL to score a different model.
+EVAL_GEN_MODEL = os.environ.get("EVAL_GEN_MODEL", RAG_GEN_MODEL)
+# Judge on a DIFFERENT family than the generator to avoid self-preference bias.
+# Haiku is independent of both the Sonnet RAG generator and the Opus agent, and
+# is the cheapest option; set EVAL_JUDGE_MODEL for a stronger judge on a reported
+# baseline.
+JUDGE_MODEL = os.environ.get("EVAL_JUDGE_MODEL", "claude-haiku-4-5")
 
 # This LangSmith workspace lives in the EU region; the SDK defaults to US (403).
 # setdefault so a LANGSMITH_ENDPOINT in .env still wins if set later.
@@ -85,12 +92,22 @@ def ensure_dataset():
 # Target (the system under test)
 # --------------------------------------------------------------------------- #
 def target(inputs: dict) -> dict:
-    result = answer_question(inputs["question"])
+    result = answer_question(inputs["question"], model=EVAL_GEN_MODEL)
     return {
         "answer": result["answer"],
         "context": result["context"],
         "retrieved_sources": [c["source"] for c in result["chunks"]],
         "num_passages": len(result["chunks"]),
+    }
+
+
+def target_retrieval(inputs: dict) -> dict:
+    """Retrieval only — no generation, so no Anthropic spend (Voyage embeddings
+    are a separate provider). Used by --retrieval-only."""
+    chunks = retrieve(inputs["question"], k=6)
+    return {
+        "retrieved_sources": [c["source"] for c in chunks],
+        "num_passages": len(chunks),
     }
 
 
@@ -101,7 +118,8 @@ def recall_at_k(outputs: dict, reference_outputs: dict):
     """Factual questions only: is the expected paper among the retrieved sources?"""
     expected = reference_outputs.get("expected_source")
     if not expected:
-        return []  # not applicable to guardrail / out-of-scope questions — skip
+        # not applicable to guardrail / out-of-scope questions — record no score
+        return {"key": "recall@k", "score": None}
     hit = expected in outputs["retrieved_sources"]
     return {"key": "recall@k", "score": 1.0 if hit else 0.0}
 
@@ -118,12 +136,12 @@ def citation_validity(outputs: dict, reference_outputs: dict):
 
 
 def _judge_binary(prompt: str) -> float:
-    msg = judge.messages.create(
+    text = complete_text(
+        judge,
         model=JUDGE_MODEL,
         max_tokens=8,
         messages=[{"role": "user", "content": prompt}],
     )
-    text = "".join(b.text for b in msg.content if b.type == "text")
     match = re.search(r"[01]", text)
     return float(match.group()) if match else 0.0
 
@@ -157,13 +175,32 @@ def correctness(inputs: dict, outputs: dict, reference_outputs: dict):
 
 # --------------------------------------------------------------------------- #
 def main() -> None:
+    import argparse
+    ap = argparse.ArgumentParser(description="RAG eval harness")
+    ap.add_argument(
+        "--retrieval-only", action="store_true",
+        help="score retrieval only (recall@k) — no LLM generation, zero Anthropic spend",
+    )
+    args = ap.parse_args()
+
     ensure_dataset()
-    print(f"Running eval over '{DATASET_NAME}' ...")
+
+    if args.retrieval_only:
+        tgt, evaluators = target_retrieval, [recall_at_k]
+        prefix, metrics = "phs-retrieval-v2", ["recall@k"]
+        print("Retrieval-only: recall@k over Voyage retrieval — no Anthropic spend.")
+    else:
+        tgt = target
+        evaluators = [recall_at_k, citation_validity, faithfulness, correctness]
+        prefix = "phs-baseline-v2"
+        metrics = ["recall@k", "citation_validity", "faithfulness", "correctness"]
+        print(f"Full eval over '{DATASET_NAME}' — gen={EVAL_GEN_MODEL}, judge={JUDGE_MODEL}")
+
     results = evaluate(
-        target,
+        tgt,
         data=DATASET_NAME,
-        evaluators=[recall_at_k, citation_validity, faithfulness, correctness],
-        experiment_prefix="phs-baseline-v2",
+        evaluators=evaluators,
+        experiment_prefix=prefix,
         client=ls,
         max_concurrency=4,
     )
@@ -177,9 +214,9 @@ def main() -> None:
                 sums[er.key] += er.score
                 counts[er.key] += 1
 
-    print("\n=== Baseline scores ===")
+    print("\n=== Scores ===")
     print(f"{'metric':20} {'mean':>6}  {'n':>3}")
-    for key in ["recall@k", "citation_validity", "faithfulness", "correctness"]:
+    for key in metrics:
         if counts[key]:
             print(f"{key:20} {sums[key] / counts[key]:>6.2f}  {counts[key]:>3}")
     print("\nOpen the experiment in LangSmith for per-question detail.")
