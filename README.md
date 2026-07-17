@@ -105,6 +105,17 @@ bloodwork extraction, Haiku 4.5 eval judge) · Voyage `voyage-3` embeddings · L
 WHOOP OAuth2 · PyMuPDF · Docker Compose · a thin static chat UI (Next.js is a documented
 future upgrade).
 
+## Deployment
+
+Running on **Azure Container Apps** (Poland Central) with managed PostgreSQL 16 + pgvector,
+the image pulled from Azure Container Registry via managed identity, and secrets in the
+Container Apps secret store. Full runbook — deploy loop, DB seeding, cost controls,
+gotchas — in [DEPLOY.md](DEPLOY.md).
+
+> **Note:** the app currently has **no authentication** (the UI hardcodes `user_id=1` and the
+> API trusts any `user_id`), so ingress is IP-restricted rather than open to the world. Real
+> auth — or a synthetic demo user with real data behind a login — is the next task.
+
 ## Quickstart
 
 ```bash
