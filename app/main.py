@@ -18,7 +18,7 @@ import os
 
 import httpx
 from fastapi import FastAPI, File, Form, UploadFile
-from fastapi.responses import FileResponse, RedirectResponse
+from fastapi.responses import FileResponse, JSONResponse, RedirectResponse
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel
 
@@ -171,6 +171,19 @@ def chat(req: ChatRequest):
 # ---- WHOOP OAuth -----------------------------------------------------------
 @app.get("/whoop/connect")
 def whoop_connect(user_id: int):
+    # The OAuth state row is keyed to a real user (FK to users.id), so an unknown
+    # user_id would otherwise surface as an opaque 500. Say what's actually wrong.
+    with get_connection() as conn, conn.cursor() as cur:
+        cur.execute("SELECT 1 FROM users WHERE id = %s", (user_id,))
+        if cur.fetchone() is None:
+            return JSONResponse(
+                status_code=404,
+                content={
+                    "error": f"No user with id {user_id} exists yet.",
+                    "hint": "Onboard first: POST /users with an email, then retry "
+                            "/whoop/connect?user_id=<the id it returns>.",
+                },
+            )
     # state = "<user_id>.<random CSRF token>". The token is stored server-side
     # and verified on callback, so a forged callback can't bind someone else's
     # authorization code to this user.
