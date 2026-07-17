@@ -18,6 +18,9 @@ services:
 
   api:
     build: .
+    # Dev-only: hot-reload on file changes. The image's own CMD is the
+    # production one (no --reload) — that's what runs in the cloud.
+    command: uvicorn app.main:app --host 0.0.0.0 --port 8000 --reload
     env_file:
       - .env
     environment:

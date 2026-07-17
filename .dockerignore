@@ -1,0 +1,36 @@
+# What NOT to copy into the Docker image.
+# Without this file, `COPY . .` in the Dockerfile would bake your .env (every API
+# key) into the image — anyone who pulls the image could read them.
+
+# Secrets — never bake into the image
+.env
+.env.*
+!.env.example
+
+# Git history
+.git/
+.gitignore
+.gitattributes
+
+# Python caches / local virtualenvs
+__pycache__/
+*.py[cod]
+*.egg-info/
+.venv/
+venv/
+.pytest_cache/
+
+# Corpus source + derived text: the embeddings live in the database, not the
+# image. Keeps the image small.
+data/papers/
+data/text/
+
+# Local-only planning docs and caches
+docs/
+.llm-cache/
+
+# OS / editor noise
+.DS_Store
+Thumbs.db
+.idea/
+.vscode/
