@@ -174,8 +174,17 @@ def parse_recovery(records: list[dict]) -> list[dict]:
 
 
 def parse_sleep(records: list[dict]) -> list[dict]:
-    """Map WHOOP /activity/sleep records to canonical metric rows. Pure: no I/O."""
+    """Map WHOOP /activity/sleep records to canonical metric rows. Pure: no I/O.
+
+    WHOOP returns overnight sleeps and naps (``nap: true``) in the same feed, and
+    a nap can share a calendar date with that night's sleep. Since metrics are
+    keyed by (date, metric_type), we keep them separate: the main sleep metrics
+    (sleep_hours, sleep_efficiency, respiratory_rate) come only from overnight
+    sessions, while naps are summed per day into their own nap_hours metric.
+    Mixing them would let a short nap overwrite the real night's sleep.
+    """
     out: list[dict] = []
+    nap_ms_by_date: dict[str, float] = {}
     for s in records:
         score = s.get("score") or {}
         date = (s.get("start") or "")[:10]
@@ -183,6 +192,13 @@ def parse_sleep(records: list[dict]) -> list[dict]:
             continue
         stages = score.get("stage_summary") or {}
         asleep_ms = sum(stages.get(k, 0) or 0 for k in _SLEEP_STAGE_KEYS)
+
+        if s.get("nap"):
+            # Accumulate; a day can have several naps.
+            if asleep_ms:
+                nap_ms_by_date[date] = nap_ms_by_date.get(date, 0) + asleep_ms
+            continue
+
         if asleep_ms:
             out.append({"date": date, "metric_type": "sleep_hours",
                         "value": round(asleep_ms / 3_600_000, 2)})
@@ -192,6 +208,10 @@ def parse_sleep(records: list[dict]) -> list[dict]:
         if score.get("respiratory_rate") is not None:
             out.append({"date": date, "metric_type": "respiratory_rate",
                         "value": round(float(score["respiratory_rate"]), 1)})
+
+    for date, ms in nap_ms_by_date.items():
+        out.append({"date": date, "metric_type": "nap_hours",
+                    "value": round(ms / 3_600_000, 2)})
     return out
 
 

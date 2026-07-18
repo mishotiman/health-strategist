@@ -80,9 +80,11 @@ def knowledge_search(query: str, config: RunnableConfig = None) -> str:
 @tool
 def health_data(metric_type: str = "", config: RunnableConfig = None) -> str:
     """Look up the user's recent health metrics. WHOOP: recovery_score, hrv_rmssd,
-    resting_hr, sleep_hours, sleep_efficiency, respiratory_rate, spo2, skin_temp.
-    Bloodwork: vitamin_d, ferritin, testosterone, crp, etc. Pass a metric_type to
-    filter to one, or leave empty for all recent metrics."""
+    resting_hr, sleep_hours, nap_hours, sleep_efficiency, respiratory_rate, spo2,
+    skin_temp. sleep_hours is the overnight sleep; nap_hours is daytime naps,
+    tracked separately — do not treat a nap as the night's sleep. Bloodwork:
+    vitamin_d, ferritin, testosterone, crp, etc. Pass a metric_type to filter to
+    one, or leave empty for all recent metrics."""
     user_id = config["configurable"]["user_id"]
     rows = query_metrics(user_id, metric_type or None, limit=40)
     return json.dumps(rows, default=str) if rows else "No health metrics on record."

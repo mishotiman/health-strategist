@@ -22,6 +22,7 @@ CANONICAL_UNITS: dict[str, str] = {
     "spo2": "%",
     "skin_temp": "celsius",
     "sleep_hours": "h",
+    "nap_hours": "h",
     "sleep_efficiency": "%",
     "respiratory_rate": "rpm",
     # bloodwork (labs)

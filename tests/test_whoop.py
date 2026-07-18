@@ -53,6 +53,41 @@ def test_parse_sleep_computes_hours_and_scores():
     assert rows["respiratory_rate"]["value"] == 14.6
 
 
+def test_parse_sleep_keeps_naps_separate_from_overnight():
+    # A nap and the night's sleep can share a calendar date. The nap must NOT
+    # overwrite sleep_hours (the real bug: a 22-min nap clobbered a 7h night).
+    records = [
+        {   # daytime nap, same date as the overnight below
+            "start": "2026-07-17T13:00:00.000Z", "nap": True,
+            "score": {"stage_summary": {"total_light_sleep_time_milli": 3_600_000}},  # 1.0 h
+        },
+        {   # the real overnight sleep
+            "start": "2026-07-17T22:00:00.000Z", "nap": False,
+            "score": {
+                "stage_summary": {"total_light_sleep_time_milli": 27_000_000},  # 7.5 h
+                "sleep_efficiency_percentage": 90.0,
+            },
+        },
+    ]
+    rows = {r["metric_type"]: r for r in parse_sleep(records)}
+
+    assert rows["sleep_hours"]["value"] == 7.5   # overnight preserved, not the nap
+    assert rows["nap_hours"]["value"] == 1.0     # nap captured separately
+    assert rows["sleep_efficiency"]["value"] == 90.0
+
+
+def test_parse_sleep_sums_multiple_naps_per_day():
+    records = [
+        {"start": "2026-07-18T10:00:00.000Z", "nap": True,
+         "score": {"stage_summary": {"total_rem_sleep_time_milli": 1_800_000}}},   # 0.5 h
+        {"start": "2026-07-18T15:00:00.000Z", "nap": True,
+         "score": {"stage_summary": {"total_rem_sleep_time_milli": 2_700_000}}},   # 0.75 h
+    ]
+    rows = {r["metric_type"]: r for r in parse_sleep(records)}
+    assert rows["nap_hours"]["value"] == 1.25    # summed
+    assert "sleep_hours" not in rows             # a nap-only day has no overnight
+
+
 def test_parsers_handle_empty_input():
     assert parse_recovery([]) == []
     assert parse_sleep([]) == []
