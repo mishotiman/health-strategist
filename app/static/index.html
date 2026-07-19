@@ -115,9 +115,13 @@
   .bw-msg { min-height:18px; font-size:13px; margin-bottom:12px; }
   .bw-msg.ok { color:var(--teal); }
   .bw-msg.err { color:#f87171; }
-  .bw-foot { display:flex; align-items:center; justify-content:space-between; gap:12px; }
-  .bw-formats { color:var(--dim); font-size:12px; }
+  .modal-head h2 .fmt { font-style:italic; font-weight:400; color:var(--dim); font-size:14px; }
+  .bw-foot { display:flex; align-items:center; justify-content:flex-end; gap:12px; }
   .bw-add { font-size:13px; padding:9px 15px; }
+  .confirm-box { max-width:380px; }
+  .confirm-box p { margin:0 0 18px; font-size:14px; line-height:1.5; }
+  #confirm-ok { background:#ef4444; color:#fff; }
+  #confirm-ok:hover { background:#dc2626; }
 </style>
 </head>
 <body>
@@ -163,16 +167,24 @@
 <div id="bw-modal" class="overlay" hidden>
   <div class="modal">
     <div class="modal-head">
-      <h2>Add bloodwork</h2>
+      <h2>Add bloodwork <span class="fmt">(PDF)</span></h2>
       <button class="x" id="bw-close" type="button" aria-label="Close">&times;</button>
     </div>
     <div id="bw-list" class="bw-list"></div>
     <div id="bw-msg" class="bw-msg"></div>
     <div class="bw-foot">
-      <span class="bw-formats">Supported formats: PDF</span>
       <button id="bw-add" class="bw-add" type="button">+ Add file</button>
     </div>
     <input id="bw-file" type="file" accept=".pdf,application/pdf" hidden>
+  </div>
+</div>
+<div id="confirm-modal" class="overlay" hidden>
+  <div class="modal confirm-box">
+    <p id="confirm-text"></p>
+    <div class="actions">
+      <button id="confirm-cancel" class="ghost" type="button">Cancel</button>
+      <button id="confirm-ok" type="button">Delete</button>
+    </div>
   </div>
 </div>
 <header>
@@ -343,6 +355,25 @@
   bwModal.addEventListener('click', (e) => { if (e.target === bwModal) bwModal.hidden = true; });
   document.getElementById('bw-add').onclick = () => bwFile.click();
 
+  // in-app confirmation dialog (replaces the native window.confirm)
+  const confirmModal = document.getElementById('confirm-modal');
+  const confirmText = document.getElementById('confirm-text');
+  const confirmOk = document.getElementById('confirm-ok');
+  let confirmResolve = null;
+  function closeConfirm(v) {
+    confirmModal.hidden = true;
+    if (confirmResolve) { confirmResolve(v); confirmResolve = null; }
+  }
+  confirmOk.onclick = () => closeConfirm(true);
+  document.getElementById('confirm-cancel').onclick = () => closeConfirm(false);
+  confirmModal.addEventListener('click', (e) => { if (e.target === confirmModal) closeConfirm(false); });
+  function askConfirm(text, okLabel) {
+    confirmText.textContent = text;
+    confirmOk.textContent = okLabel || 'Delete';
+    confirmModal.hidden = false;
+    return new Promise(res => { confirmResolve = res; });
+  }
+
   function bwSetMsg(text, kind) { bwMsg.textContent = text || ''; bwMsg.className = 'bw-msg' + (kind ? ' ' + kind : ''); }
 
   async function openBw() { bwSetMsg(''); bwModal.hidden = false; await loadBwDocs(); }
@@ -372,7 +403,7 @@
       '</polyline><path d="M19 6l-1 14a2 2 0 0 1-2 2H8a2 2 0 0 1-2-2L5 6m3 0V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2">' +
       '</path></svg>';
     del.onclick = async () => {
-      if (!confirm('Delete "' + d.name + '" and its values?')) return;
+      if (!(await askConfirm('Delete "' + d.name + '" and its values?'))) return;
       try { await fetch('/bloodwork/documents/' + d.id, { method: 'DELETE' }); } catch (e) {}
       await loadBwDocs();
       bwSetMsg('Deleted "' + d.name + '".', '');
