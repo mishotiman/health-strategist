@@ -142,10 +142,21 @@ def normalize_metrics(extracted_metrics: list[dict]) -> tuple[list[dict], list[d
 _SCHEMA = {
     "type": "object",
     "additionalProperties": False,
-    "required": ["report_date", "metrics"],
+    "required": ["document_type", "document_summary", "report_date", "metrics"],
     "properties": {
+        "document_type": {
+            "type": "string",
+            "enum": ["bloodwork", "health_other", "not_health"],
+            "description": "bloodwork = a laboratory report with numeric blood/lab test "
+                           "results; health_other = health-related but NOT a lab report with "
+                           "values (imaging report, doctor's note, prescription, discharge "
+                           "summary, fitness/nutrition plan); not_health = unrelated to health "
+                           "(invoice, receipt, resume, contract, etc.).",
+        },
+        "document_summary": {"type": "string",
+                             "description": "At most 12 words naming what this document is."},
         "report_date": {"type": "string",
-                        "description": "Sample collection date as YYYY-MM-DD"},
+                        "description": "Sample collection date as YYYY-MM-DD, or '' if none."},
         "metrics": {
             "type": "array",
             "items": {
@@ -175,16 +186,20 @@ def extract_text(pdf_bytes: bytes) -> str:
 def extract_metrics(text: str) -> dict:
     metric_list = ", ".join(BLOODWORK_TYPES)
     prompt = (
-        "Extract laboratory test results from this bloodwork report.\n"
-        f"Only include tests matching one of these metric_types: {metric_list}.\n\n"
-        "Rules:\n"
+        "You are processing an uploaded document. First classify it via "
+        "document_type (bloodwork / health_other / not_health) and give a short "
+        "document_summary naming what it is.\n\n"
+        "ONLY if document_type is 'bloodwork', extract laboratory test results "
+        f"matching one of these metric_types: {metric_list}.\n"
+        "Extraction rules:\n"
         "- Match each value to its correct test name carefully (layouts can be "
         "misaligned; do not grab a neighbouring test's number).\n"
         "- Report the numeric value and its unit EXACTLY as printed. DO NOT "
         "convert units or do any arithmetic — that happens downstream.\n"
         "- If you cannot confidently identify a test or its value, omit it.\n"
-        "- Extract the sample collection date as YYYY-MM-DD.\n\n"
-        f"REPORT TEXT:\n{text}"
+        "- Set report_date to the sample collection date as YYYY-MM-DD.\n"
+        "For any other document_type, return metrics: [] and report_date: ''.\n\n"
+        f"DOCUMENT TEXT:\n{text}"
     )
     msg = _claude.messages.create(
         model=EXTRACT_MODEL,
@@ -197,16 +212,46 @@ def extract_metrics(text: str) -> dict:
 
 
 def ingest_pdf(user_id: int, pdf_bytes: bytes) -> dict:
-    extracted = extract_metrics(extract_text(pdf_bytes))
-    date = extracted["report_date"]
+    import datetime as dt
+
+    text = extract_text(pdf_bytes)
+    if not text.strip():
+        return {"status": "unreadable", "metrics_written": 0,
+                "message": "I couldn't read any text from that PDF. If it's a scanned "
+                           "image, try a text-based export of your lab report."}
+
+    extracted = extract_metrics(text)
+    doc_type = extracted.get("document_type", "not_health")
+    summary = (extracted.get("document_summary") or "").strip()
+
+    # Only lab reports get ingested. Everything else is explained, not stored.
+    if doc_type != "bloodwork":
+        if doc_type == "health_other":
+            msg = (f"That looks like a health document ({summary}), but not a lab/bloodwork "
+                   "report with test values, so I didn't save anything. Upload a lab report "
+                   "(CBC, metabolic panel, vitamin/hormone levels, etc.) to add bloodwork.")
+        else:
+            msg = (f"That doesn't look like a health document ({summary}), so I didn't save "
+                   "anything. This upload is for bloodwork/lab-report PDFs.")
+        return {"status": "not_bloodwork", "document_type": doc_type,
+                "summary": summary, "metrics_written": 0, "message": msg}
+
     accepted, rejected = normalize_metrics(extracted["metrics"])
+    if not accepted:
+        return {"status": "no_values", "document_type": doc_type, "metrics_written": 0,
+                "rejected": rejected,
+                "message": "This looks like a lab report, but I couldn't confidently read "
+                           "any of the values I track. It may use an unusual layout or units."}
+
+    # Lab reports carry a collection date; fall back to today only if it's missing.
+    date = (extracted.get("report_date") or "").strip() or dt.date.today().isoformat()
     records = [
-        {"date": date, "metric_type": m["metric_type"], "value": m["value"],
-         "unit": m["unit"]}
+        {"date": date, "metric_type": m["metric_type"], "value": m["value"], "unit": m["unit"]}
         for m in accepted
     ]
     written = upsert_metrics(user_id, "bloodwork", records)
     return {
+        "status": "ok",
         "source": "bloodwork",
         "report_date": date,
         "metrics_written": written,

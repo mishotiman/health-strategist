@@ -46,6 +46,9 @@
   input:focus { outline:none; border-color:var(--teal); }
   button { background:var(--teal); color:#04201c; border:none; border-radius:10px; padding:0 20px; font-weight:600; cursor:pointer; }
   button:disabled { opacity:.5; cursor:default; }
+  .attach { background:var(--panel); border:1px solid var(--line); color:var(--dim);
+            font-size:22px; line-height:1; width:46px; padding:0; flex:0 0 auto; }
+  .attach:hover { border-color:var(--teal); color:var(--teal); }
   .hint { color:var(--dim); font-size:13px; text-align:center; margin:auto; max-width:520px; }
   .who { margin-left:auto; font-size:12px; color:var(--dim); display:flex; align-items:center; gap:7px; }
   .who b { color:var(--ink); }
@@ -136,6 +139,8 @@
 </div>
 
 <form id="form">
+  <input id="file" type="file" accept=".pdf,application/pdf" hidden>
+  <button id="attach" type="button" class="attach" title="Upload a bloodwork PDF">+</button>
   <input id="input" autocomplete="off" placeholder="e.g. How's my recovery trending, and how should I train this week?" />
   <button id="send" type="submit">Send</button>
 </form>
@@ -262,6 +267,38 @@
       chat.appendChild(t);
     }
   }
+
+  // ---- bloodwork upload ---------------------------------------------------
+  const fileInput = document.getElementById('file');
+  document.getElementById('attach').onclick = () => fileInput.click();
+  function uploadResult(d) {
+    if (d.status === 'ok') {
+      const list = (d.extracted || [])
+        .map(m => '**' + m.metric_type + '**: ' + m.value + ' ' + m.unit).join(' · ');
+      return '✓ Added **' + d.metrics_written + '** lab value' +
+        (d.metrics_written === 1 ? '' : 's') + ' from your bloodwork' +
+        (d.report_date ? ' (dated ' + d.report_date + ')' : '') + '.' +
+        (list ? '\n\n' + list : '');
+    }
+    return d.message || 'Sorry, I could not process that file.';
+  }
+  fileInput.onchange = async () => {
+    const f = fileInput.files[0];
+    if (!f) return;
+    addUser('📎 ' + f.name);
+    const bot = addBot();
+    chat.scrollTop = chat.scrollHeight;
+    const fd = new FormData();
+    fd.append('file', f);
+    fileInput.value = '';
+    try {
+      const res = await fetch('/upload/bloodwork', { method: 'POST', body: fd });
+      bot.innerHTML = marked.parse(uploadResult(await res.json()));
+    } catch (err) {
+      bot.textContent = 'Upload failed: ' + err;
+    }
+    chat.scrollTop = chat.scrollHeight;
+  };
 
   // ---- chat ---------------------------------------------------------------
   form.addEventListener('submit', async (e) => {

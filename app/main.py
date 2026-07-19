@@ -17,7 +17,7 @@ from __future__ import annotations
 import os
 
 import httpx
-from fastapi import Depends, FastAPI, File, Form, Request, Response, UploadFile
+from fastapi import Depends, FastAPI, File, Request, Response, UploadFile
 from fastapi.responses import FileResponse, JSONResponse, RedirectResponse
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel
@@ -234,8 +234,15 @@ def get_metrics(user_id: int, type: str | None = None, limit: int = 100,
 
 
 @app.post("/upload/bloodwork")
-async def upload_bloodwork(user_id: int = Form(...), file: UploadFile = File(...)):
-    """Upload a lab-report PDF; Claude extracts values into normalized metrics."""
+async def upload_bloodwork(file: UploadFile = File(...),
+                           user_id: int = Depends(current_user_id)):
+    """Upload a lab-report PDF; Claude classifies it and, if it's bloodwork,
+    extracts values into normalized metrics for the current user."""
+    is_pdf = (file.filename or "").lower().endswith(".pdf") or file.content_type == "application/pdf"
+    if not is_pdf:
+        return JSONResponse(status_code=400,
+                            content={"status": "bad_file", "metrics_written": 0,
+                                     "message": "Please upload a PDF lab report."})
     return bloodwork.ingest_pdf(user_id, await file.read())
 
 
