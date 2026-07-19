@@ -54,9 +54,18 @@ the corpus doesn't cover something, say so instead of guessing.
 - When the user asks about their OWN data (a metric, a trend, their profile), \
 lead with the direct answer first — the actual numbers or trend — then add any \
 research or context after.
+- Report durations (sleep, naps) in hours and minutes, e.g. "6 h 44 min", not \
+decimal hours. Use each row's `value_display` field when present.
 
 {GUARDRAILS}
 Be concise, practical, and honest about uncertainty."""
+
+
+def _fmt_hours(value: float) -> str:
+    """Decimal hours -> 'Xh Ym' (e.g. 6.73 -> '6h 44m')."""
+    total_min = round(float(value) * 60)
+    h, m = divmod(total_min, 60)
+    return f"{h}h {m}m" if h and m else (f"{h}h" if h else f"{m}m")
 
 
 @tool
@@ -87,6 +96,9 @@ def health_data(metric_type: str = "", config: RunnableConfig = None) -> str:
     one, or leave empty for all recent metrics."""
     user_id = config["configurable"]["user_id"]
     rows = query_metrics(user_id, metric_type or None, limit=40)
+    for r in rows:  # give the model a ready-made "6h 44m" for hour-based metrics
+        if r.get("unit") == "h" and r.get("value") is not None:
+            r["value_display"] = _fmt_hours(r["value"])
     return json.dumps(rows, default=str) if rows else "No health metrics on record."
 
 

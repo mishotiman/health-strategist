@@ -49,12 +49,17 @@
   .hint { color:var(--dim); font-size:13px; text-align:center; margin:auto; max-width:520px; }
   .who { margin-left:auto; font-size:12px; color:var(--dim); display:flex; align-items:center; gap:7px; }
   .who b { color:var(--ink); }
-  .who .badge { font-size:10px; text-transform:uppercase; letter-spacing:.04em; padding:2px 6px; border-radius:6px; }
-  .who .badge.demo { background:#3a2f13; color:#e8c37a; }
-  .who .badge.real { background:#0d2b28; color:var(--teal); }
+  .who b.demo { color:#e8c37a; }   /* amber = sample account */
+  .who b.live { color:var(--teal); } /* teal = your real account */
   .authbtn { font-size:12px; padding:6px 12px; border-radius:8px; background:var(--panel);
              border:1px solid var(--line); color:var(--ink); cursor:pointer; }
   .authbtn:hover { border-color:var(--teal); }
+  /* themed scrollbars */
+  * { scrollbar-width: thin; scrollbar-color: #33475a transparent; }
+  ::-webkit-scrollbar { width:10px; height:10px; }
+  ::-webkit-scrollbar-track { background:transparent; }
+  ::-webkit-scrollbar-thumb { background:#2b3a49; border-radius:6px; border:2px solid var(--bg); }
+  ::-webkit-scrollbar-thumb:hover { background:#3a4f63; }
 </style>
 </head>
 <body>
@@ -92,10 +97,8 @@
   // ---- who is connected? (demo user by default, or the logged-in account) --
   let me = { name: 'Demo User', is_demo: true };
   function renderWho() {
-    const badge = me.is_demo
-      ? '<span class="badge demo">demo</span>'
-      : '<span class="badge real">live</span>';
-    who.innerHTML = 'Connected: <b>' + me.name + '</b> ' + badge;
+    const cls = me.is_demo ? 'demo' : 'live';
+    who.innerHTML = 'Connected: <b class="' + cls + '">' + me.name + '</b>';
     if (me.is_demo) {
       authbtn.textContent = 'Log in with WHOOP';
       authbtn.onclick = () => { location.href = '/whoop/connect'; };
