@@ -91,9 +91,13 @@ def health_data(metric_type: str = "", config: RunnableConfig = None) -> str:
     """Look up the user's recent health metrics. WHOOP: recovery_score, hrv_rmssd,
     resting_hr, sleep_hours, nap_hours, sleep_efficiency, respiratory_rate, spo2,
     skin_temp. sleep_hours is the overnight sleep; nap_hours is daytime naps,
-    tracked separately — do not treat a nap as the night's sleep. Bloodwork:
-    vitamin_d, ferritin, testosterone, crp, etc. Pass a metric_type to filter to
-    one, or leave empty for all recent metrics."""
+    tracked separately — do not treat a nap as the night's sleep. Bloodwork
+    (numeric): full CBC + differential, hemoglobin, biochemistry (creatinine,
+    alt, ast, ggt, electrolytes, iron), inflammation (crp, hs_crp, calprotectin),
+    vitamins (vitamin_d, vitamin_b12, folate, …), minerals (magnesium, zinc, …).
+    Some results are qualitative (microbiology like clostridium_difficile_*,
+    quantiferon_tb) — those carry a text_value ("negative"/"positive") instead of
+    a numeric value. Pass a metric_type to filter, or leave empty for all recent."""
     user_id = config["configurable"]["user_id"]
     rows = query_metrics(user_id, metric_type or None, limit=40)
     for r in rows:  # give the model a ready-made "6h 44m" for hour-based metrics

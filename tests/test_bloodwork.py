@@ -5,12 +5,14 @@ import pytest
 
 from app.bloodwork import (
     BLOODWORK_TYPES,
+    QUALITATIVE_TYPES,
     TARGET_UNITS,
     _FACTORS,
     _RANGES,
     convert_to_canonical,
     in_range,
     normalize_metrics,
+    normalize_qualitative,
 )
 from app.ingestion import CANONICAL_UNITS
 
@@ -79,3 +81,35 @@ def test_bloodwork_types_are_fully_specified():
         assert t in TARGET_UNITS
         assert t in _RANGES
         assert t == "hba1c" or t in _FACTORS
+
+
+@pytest.mark.parametrize("metric, value, unit, expected", [
+    ("hemoglobin", 15.2, "g/dL", 152.0),       # g/dL x10 -> g/L
+    ("hematocrit", 44.1, "%", 0.441),          # % x0.01 -> L/L
+    ("creatinine", 1.0, "mg/dL", 88.42),       # mg/dL -> µmol/L
+    ("wbc", 8.9, "G/l", 8.9),                  # G/l == 10^9/L (identity)
+    ("hs_crp", 8.56, "mg/L", 8.56),            # distinct from crp, same units
+    ("vitamin_b12", 400, "pmol/L", 400 * 1.355),
+])
+def test_expanded_conversions(metric, value, unit, expected):
+    assert convert_to_canonical(metric, value, unit) == pytest.approx(expected)
+
+
+def test_hs_crp_is_separate_from_crp():
+    assert "hs_crp" in BLOODWORK_TYPES and "crp" in BLOODWORK_TYPES
+    assert TARGET_UNITS["hs_crp"] == "mg/L"
+
+
+def test_normalize_qualitative_accepts_and_rejects():
+    accepted, rejected = normalize_qualitative([
+        {"metric_type": "clostridium_difficile_toxin_a", "result": "(-) negative"},
+        {"metric_type": "quantiferon_tb", "result": "positive"},
+        {"metric_type": "not_a_microbe", "result": "negative"},   # unknown metric
+        {"metric_type": "clostridium_difficile_gdh", "result": "maybe"},  # bad result
+    ])
+    by_type = {a["metric_type"]: a for a in accepted}
+    assert by_type["clostridium_difficile_toxin_a"]["text_value"] == "negative"
+    assert by_type["quantiferon_tb"]["text_value"] == "positive"
+    assert len(accepted) == 2
+    assert len(rejected) == 2
+    assert all(t in QUALITATIVE_TYPES for t in by_type)

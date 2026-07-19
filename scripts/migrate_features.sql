@@ -2,6 +2,9 @@
 ALTER TABLE users ADD COLUMN IF NOT EXISTS display_name TEXT;
 ALTER TABLE users ADD COLUMN IF NOT EXISTS is_demo BOOLEAN NOT NULL DEFAULT false;
 
+-- Qualitative lab results (e.g. microbiology negative/positive) alongside numeric values.
+ALTER TABLE health_metrics ADD COLUMN IF NOT EXISTS text_value TEXT;
+
 -- Uploaded bloodwork reports (metadata; values live in health_metrics).
 CREATE TABLE IF NOT EXISTS bloodwork_documents (
     id            BIGSERIAL PRIMARY KEY,

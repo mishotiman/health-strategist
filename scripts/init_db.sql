@@ -60,8 +60,9 @@ CREATE TABLE IF NOT EXISTS health_metrics (
     source      TEXT NOT NULL,          -- whoop | garmin | bloodwork | manual
     metric_date DATE NOT NULL,
     metric_type TEXT NOT NULL,          -- hrv | rhr | sleep_hours | vo2max | ...
-    value       DOUBLE PRECISION,
-    unit        TEXT
+    value       DOUBLE PRECISION,       -- numeric result
+    unit        TEXT,
+    text_value  TEXT                    -- qualitative result (e.g. microbiology: negative/positive)
 );
 
 -- Idempotent ingestion: one row per (user, source, date, metric_type).
