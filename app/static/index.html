@@ -47,6 +47,14 @@
   button { background:var(--teal); color:#04201c; border:none; border-radius:10px; padding:0 20px; font-weight:600; cursor:pointer; }
   button:disabled { opacity:.5; cursor:default; }
   .hint { color:var(--dim); font-size:13px; text-align:center; margin:auto; max-width:520px; }
+  .who { margin-left:auto; font-size:12px; color:var(--dim); display:flex; align-items:center; gap:7px; }
+  .who b { color:var(--ink); }
+  .who .badge { font-size:10px; text-transform:uppercase; letter-spacing:.04em; padding:2px 6px; border-radius:6px; }
+  .who .badge.demo { background:#3a2f13; color:#e8c37a; }
+  .who .badge.real { background:#0d2b28; color:var(--teal); }
+  .authbtn { font-size:12px; padding:6px 12px; border-radius:8px; background:var(--panel);
+             border:1px solid var(--line); color:var(--ink); cursor:pointer; }
+  .authbtn:hover { border-color:var(--teal); }
 </style>
 </head>
 <body>
@@ -54,6 +62,8 @@
   <span class="dot"></span>
   <h1>Personal Health Strategist</h1>
   <span class="sub">agentic RAG · WHOOP + bloodwork · cited</span>
+  <span id="who" class="who"></span>
+  <button id="authbtn" class="authbtn" type="button"></button>
 </header>
 <div id="status"></div>
 
@@ -73,27 +83,56 @@
   const input = document.getElementById('input');
   const send = document.getElementById('send');
   const statusEl = document.getElementById('status');
+  const who = document.getElementById('who');
+  const authbtn = document.getElementById('authbtn');
   const threadId = 'web-' + Math.random().toString(36).slice(2, 10);
-  const USER_ID = 1;
 
   marked.setOptions({ breaks: true });
 
-  // ---- WHOOP auto-sync on open -------------------------------------------
-  (async () => {
+  // ---- who is connected? (demo user by default, or the logged-in account) --
+  let me = { name: 'Demo User', is_demo: true };
+  function renderWho() {
+    const badge = me.is_demo
+      ? '<span class="badge demo">demo</span>'
+      : '<span class="badge real">live</span>';
+    who.innerHTML = 'Connected: <b>' + me.name + '</b> ' + badge;
+    if (me.is_demo) {
+      authbtn.textContent = 'Log in with WHOOP';
+      authbtn.onclick = () => { location.href = '/whoop/connect'; };
+    } else {
+      authbtn.textContent = 'Exit to demo';
+      authbtn.onclick = async () => {
+        await fetch('/auth/logout', { method: 'POST' });
+        location.reload();
+      };
+    }
+  }
+
+  async function syncStatus() {
+    if (me.is_demo) {
+      statusEl.innerHTML = 'Showing sample data for <b>Demo User</b> — ' +
+        '<a href="/whoop/connect" style="color:var(--teal)">log in with WHOOP</a> to see your own.';
+      return;
+    }
     statusEl.textContent = 'Syncing WHOOP…';
     try {
-      const r = await fetch('/whoop/sync?user_id=' + USER_ID);
+      const r = await fetch('/whoop/sync');
       const d = await r.json();
       if (d.metrics_written != null) {
         statusEl.textContent = '✓ WHOOP synced — ' + d.metrics_written + ' metrics up to date';
         statusEl.className = 'ok';
         setTimeout(() => { statusEl.style.opacity = '0'; }, 4000);
       } else {
-        // not connected, or token expired / refresh failed → prompt reconnect
-        statusEl.innerHTML = 'WHOOP session inactive — <a href="/whoop/connect?user_id=' +
-          USER_ID + '" style="color:var(--teal)">reconnect to refresh your data</a>.';
+        statusEl.innerHTML = 'WHOOP session inactive — ' +
+          '<a href="/whoop/connect" style="color:var(--teal)">reconnect to refresh your data</a>.';
       }
     } catch (e) { statusEl.textContent = ''; }
+  }
+
+  (async () => {
+    try { me = await (await fetch('/me')).json(); } catch (e) {}
+    renderWho();
+    await syncStatus();
   })();
 
   // ---- render helpers -----------------------------------------------------
@@ -151,7 +190,7 @@
       const res = await fetch('/chat', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ user_id: USER_ID, message: q, thread_id: threadId })
+        body: JSON.stringify({ message: q, thread_id: threadId })
       });
       renderBot(bot, await res.json());
     } catch (err) {

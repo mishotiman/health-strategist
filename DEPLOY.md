@@ -143,16 +143,40 @@ az group delete --name phs-rg --yes --no-wait
 
 ACR Basic (~$5/mo) has no stop — only delete.
 
+## Auth / demo user
+
+The public URL defaults to a synthetic **Demo User**; real data is behind a
+login. Completing WHOOP OAuth sets a signed session cookie (`app/session.py`)
+identifying the browser as the owner account; without it, callers are the demo
+user. `/chat`, `/whoop/sync`, and `/metrics/{id}` derive the user from the
+session, so real data (`/metrics/1`) returns 403 without the cookie.
+
+**Rolling this out to a fresh/existing cloud DB:**
+```powershell
+# 1. migration adds users.display_name + users.is_demo
+Get-Content scripts\migrate_features.sql -Raw | docker compose exec -T db psql "$url"
+# 2. seed the demo user (run against the cloud DB: point the api container's
+#    DATABASE_URL at $url, or run the SQL/seed with that connection)
+docker compose exec -T api python scripts/seed_demo_user.py
+# 3. set a real session secret (REQUIRED in prod — dev default is insecure)
+az containerapp secret set -g phs-rg -n phs-api --secrets "session-secret=<long-random>"
+az containerapp update -g phs-rg -n phs-api `
+  --set-env-vars "SESSION_SECRET=secretref:session-secret" "OWNER_USER_ID=1"
+```
+After this, `SESSION_SECRET` joins the secret list below. Confirm the WHOOP
+callback URL is registered (it already is) so login redirects work.
+
 ## Security notes
 
-- **No authentication.** The UI hardcodes `user_id=1` and the API trusts any
-  `user_id`, so anyone with the URL can read `/metrics/1` and chat as that user.
-  Restrict ingress while that's true:
+- **Auth is demo-user + WHOOP-login** (above). Ingress no longer *needs* to be
+  IP-restricted to protect data, but you can still lock it to your IP for a
+  fully private instance:
   ```powershell
   az containerapp ingress access-restriction set -g phs-rg -n phs-api `
     --rule-name allow-my-ip --ip-address <your-ip>/32 --action Allow
-  az containerapp ingress access-restriction list -g phs-rg -n phs-api -o table
   ```
+- Write endpoints (`POST /metrics`, `/upload/bloodwork`, `POST /users`) still
+  take a `user_id` and are not yet session-gated — a follow-up if needed.
 - ACR admin user is disabled; the Container App pulls via its system-assigned
   managed identity.
 - `MemorySaver` keeps agent conversation state in RAM, so keep `--max-replicas 1`

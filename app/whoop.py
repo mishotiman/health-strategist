@@ -222,9 +222,28 @@ def _get(path: str, token: str, params: dict) -> dict:
     return resp.json()
 
 
+def fetch_display_name(user_id: int) -> str | None:
+    """The connected WHOOP account's name (read:profile scope) — shown in the UI."""
+    p = _get("/user/profile/basic", _valid_access_token(user_id), {})
+    name = " ".join(x for x in (p.get("first_name"), p.get("last_name")) if x).strip()
+    return name or None
+
+
+def _store_display_name(user_id: int, name: str) -> None:
+    with get_connection() as conn, conn.cursor() as cur:
+        cur.execute("UPDATE users SET display_name = %s WHERE id = %s", (name, user_id))
+        conn.commit()
+
+
 def connect_and_sync(user_id: int, code: str) -> dict:
-    """Called from the OAuth callback: store tokens, then pull recent data."""
+    """Called from the OAuth callback: store tokens, capture the WHOOP name, sync."""
     _save_tokens(user_id, exchange_code(code))
+    try:  # best-effort: a profile hiccup shouldn't fail the whole connection
+        name = fetch_display_name(user_id)
+        if name:
+            _store_display_name(user_id, name)
+    except httpx.HTTPStatusError:
+        pass
     return sync(user_id)
 
 

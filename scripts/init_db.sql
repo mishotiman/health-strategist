@@ -5,9 +5,11 @@ CREATE EXTENSION IF NOT EXISTS vector;
 
 -- Users & profile ---------------------------------------------------------
 CREATE TABLE IF NOT EXISTS users (
-    id         BIGSERIAL PRIMARY KEY,
-    email      TEXT UNIQUE,
-    created_at TIMESTAMPTZ NOT NULL DEFAULT now()
+    id           BIGSERIAL PRIMARY KEY,
+    email        TEXT UNIQUE,
+    display_name TEXT,                       -- shown in the UI ("Demo User" / real WHOOP name)
+    is_demo      BOOLEAN NOT NULL DEFAULT false,  -- the public sample account
+    created_at   TIMESTAMPTZ NOT NULL DEFAULT now()
 );
 
 CREATE TABLE IF NOT EXISTS profiles (

@@ -17,12 +17,12 @@ from __future__ import annotations
 import os
 
 import httpx
-from fastapi import FastAPI, File, Form, UploadFile
+from fastapi import Depends, FastAPI, File, Form, Request, Response, UploadFile
 from fastapi.responses import FileResponse, JSONResponse, RedirectResponse
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel
 
-from app import agent, bloodwork, whoop
+from app import agent, bloodwork, session as sess, whoop
 from app.db import get_connection
 from app.ingestion import query_metrics, upsert_metrics
 from app.qa import answer_question
@@ -32,6 +32,34 @@ app = FastAPI(title="Personal Health Strategist")
 
 _STATIC_DIR = os.path.join(os.path.dirname(__file__), "static")
 app.mount("/static", StaticFiles(directory=_STATIC_DIR), name="static")
+
+# The real account WHOOP "log in" connects (single-owner app).
+OWNER_USER_ID = int(os.environ.get("OWNER_USER_ID", "1"))
+
+
+def _demo_user_id() -> int:
+    """The public sample account. Anyone without a login session is treated as this user."""
+    with get_connection() as conn, conn.cursor() as cur:
+        cur.execute("SELECT id FROM users WHERE is_demo = true ORDER BY id LIMIT 1")
+        row = cur.fetchone()
+    return row[0] if row else OWNER_USER_ID
+
+
+def current_user_id(request: Request) -> int:
+    """Who is this request? A valid signed cookie -> that user; otherwise the demo user."""
+    uid = sess.read_token(request.cookies.get(sess.COOKIE_NAME))
+    return uid if uid is not None else _demo_user_id()
+
+
+def _user_info(user_id: int) -> dict:
+    with get_connection() as conn, conn.cursor() as cur:
+        cur.execute("SELECT id, display_name, is_demo FROM users WHERE id = %s", (user_id,))
+        row = cur.fetchone()
+    if not row:
+        return {"user_id": user_id, "name": "Unknown", "is_demo": True}
+    uid, name, is_demo = row
+    return {"user_id": uid, "is_demo": is_demo,
+            "name": name or ("Demo User" if is_demo else "Your account")}
 
 
 @app.get("/")
@@ -70,7 +98,6 @@ class MetricsRequest(BaseModel):
 
 
 class ChatRequest(BaseModel):
-    user_id: int
     message: str
     thread_id: str | None = None
 
@@ -87,6 +114,21 @@ def db_check():
         cur.execute("SELECT 1 FROM pg_extension WHERE extname = 'vector'")
         has_vector = cur.fetchone() is not None
     return {"db": "reachable", "pgvector": has_vector}
+
+
+# ---- session ("who is connected") ------------------------------------------
+@app.get("/me")
+def me(user_id: int = Depends(current_user_id)):
+    """Which WHOOP user this browser is acting as: the demo user, or the real
+    logged-in account. The UI reads this to render the 'Connected: …' label."""
+    return _user_info(user_id)
+
+
+@app.post("/auth/logout")
+def logout(response: Response):
+    """Drop the session cookie — back to the demo user."""
+    response.delete_cookie(sess.COOKIE_NAME)
+    return {"ok": True}
 
 
 # ---- RAG -------------------------------------------------------------------
@@ -151,7 +193,12 @@ def ingest_metrics(req: MetricsRequest):
 
 
 @app.get("/metrics/{user_id}")
-def get_metrics(user_id: int, type: str | None = None, limit: int = 100):
+def get_metrics(user_id: int, type: str | None = None, limit: int = 100,
+                session_user: int = Depends(current_user_id)):
+    # Only your own data (via login session) or the public demo user's.
+    if user_id != session_user and user_id != _demo_user_id():
+        return JSONResponse(status_code=403,
+                            content={"error": "not authorized to read this user's metrics"})
     return {"user_id": user_id, "metrics": query_metrics(user_id, type, limit)}
 
 
@@ -163,26 +210,24 @@ async def upload_bloodwork(user_id: int = Form(...), file: UploadFile = File(...
 
 # ---- agent -----------------------------------------------------------------
 @app.post("/chat")
-def chat(req: ChatRequest):
-    """Talk to the health-strategist agent (orchestrates the tools + memory)."""
-    return agent.run(req.user_id, req.message, req.thread_id)
+def chat(req: ChatRequest, user_id: int = Depends(current_user_id)):
+    """Talk to the health-strategist agent as the logged-in user (or demo user).
+    The thread is namespaced per user so demo and real memory never mix."""
+    thread = f"{user_id}:{req.thread_id}" if req.thread_id else None
+    return agent.run(user_id, req.message, thread)
 
 
 # ---- WHOOP OAuth -----------------------------------------------------------
 @app.get("/whoop/connect")
-def whoop_connect(user_id: int):
-    # The OAuth state row is keyed to a real user (FK to users.id), so an unknown
-    # user_id would otherwise surface as an opaque 500. Say what's actually wrong.
+def whoop_connect(user_id: int = OWNER_USER_ID):
+    """Start 'Log in with WHOOP' for the owner account (defaults to OWNER_USER_ID)."""
     with get_connection() as conn, conn.cursor() as cur:
         cur.execute("SELECT 1 FROM users WHERE id = %s", (user_id,))
         if cur.fetchone() is None:
             return JSONResponse(
                 status_code=404,
-                content={
-                    "error": f"No user with id {user_id} exists yet.",
-                    "hint": "Onboard first: POST /users with an email, then retry "
-                            "/whoop/connect?user_id=<the id it returns>.",
-                },
+                content={"error": f"No user with id {user_id} exists yet.",
+                         "hint": "Onboard first: POST /users with an email."},
             )
     # state = "<user_id>.<random CSRF token>". The token is stored server-side
     # and verified on callback, so a forged callback can't bind someone else's
@@ -192,8 +237,11 @@ def whoop_connect(user_id: int):
 
 
 @app.get("/whoop/sync")
-def whoop_sync(user_id: int):
-    """Pull the latest WHOOP data for a connected user (called on app open)."""
+def whoop_sync(user_id: int = Depends(current_user_id)):
+    """Pull the latest WHOOP data for the logged-in user (called on app open).
+    The demo user has pre-seeded sample data, so there's nothing to sync."""
+    if _user_info(user_id)["is_demo"]:
+        return {"demo": True, "detail": "Showing sample data for Demo User."}
     try:
         return whoop.sync(user_id)
     except RuntimeError as e:            # not connected yet
@@ -219,6 +267,15 @@ def whoop_callback(code: str | None = None, state: str | None = None,
     if user_id is None:
         return {"error": "invalid or expired OAuth state — restart at /whoop/connect"}
     try:
-        return whoop.connect_and_sync(user_id, code)
+        whoop.connect_and_sync(user_id, code)
     except httpx.HTTPStatusError as e:
         return {"whoop_api_error": e.response.status_code, "detail": e.response.text[:500]}
+    # Log this browser in as the connected user, then return to the app.
+    resp = RedirectResponse(url="/", status_code=303)
+    resp.set_cookie(
+        sess.COOKIE_NAME, sess.make_token(user_id),
+        httponly=True, samesite="lax",
+        secure=whoop.REDIRECT_URI.startswith("https"),  # over HTTPS in prod
+        max_age=60 * 60 * 24 * 30,
+    )
+    return resp
