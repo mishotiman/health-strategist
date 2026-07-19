@@ -299,6 +299,26 @@ def rename_bloodwork_document(doc_id: int, req: RenameRequest,
     return {"ok": True, "id": doc_id, "name": name}
 
 
+@app.delete("/bloodwork/documents/{doc_id}")
+def delete_bloodwork_document(doc_id: int, user_id: int = Depends(current_user_id)):
+    """Remove an uploaded report and the lab values it contributed. (Values are
+    matched by report_date; a rare second report on the same date would share them.)"""
+    with get_connection() as conn, conn.cursor() as cur:
+        cur.execute("SELECT report_date FROM bloodwork_documents WHERE id = %s AND user_id = %s",
+                    (doc_id, user_id))
+        row = cur.fetchone()
+        if row is None:
+            return JSONResponse(status_code=404, content={"error": "document not found"})
+        report_date = row[0]
+        cur.execute("DELETE FROM bloodwork_documents WHERE id = %s AND user_id = %s",
+                    (doc_id, user_id))
+        if report_date is not None:
+            cur.execute("DELETE FROM health_metrics WHERE user_id = %s AND source = 'bloodwork' "
+                        "AND metric_date = %s", (user_id, report_date))
+        conn.commit()
+    return {"ok": True, "id": doc_id}
+
+
 # ---- agent -----------------------------------------------------------------
 @app.post("/chat")
 def chat(req: ChatRequest, user_id: int = Depends(current_user_id)):

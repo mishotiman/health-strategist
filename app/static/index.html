@@ -106,6 +106,9 @@
   .bw-item .edit { background:transparent; border:none; color:var(--dim); width:auto;
                    padding:2px 6px; font-size:15px; cursor:pointer; }
   .bw-item .edit:hover { color:var(--teal); }
+  .bw-item .del { background:transparent; border:none; color:#f87171; width:auto; padding:2px 6px;
+                  cursor:pointer; display:inline-flex; align-items:center; }
+  .bw-item .del:hover { color:#ef4444; }
   .bw-item input.rename { flex:1; background:var(--panel); border:1px solid var(--teal);
                           color:var(--ink); border-radius:6px; padding:5px 8px; font-size:14px; }
   .bw-empty { color:var(--dim); font-size:13px; padding:10px 2px; }
@@ -357,11 +360,24 @@
     const row = document.createElement('div'); row.className = 'bw-item';
     const nm = document.createElement('span'); nm.className = 'nm'; nm.textContent = d.name;
     const meta = document.createElement('span'); meta.className = 'meta';
-    meta.textContent = (d.report_date ? d.report_date + ' · ' : '') + d.metrics_count + ' values';
+    const n = d.metrics_count;
+    meta.textContent = (d.report_date ? d.report_date + ' · ' : '') + n + (n === 1 ? ' value' : ' values');
     const edit = document.createElement('button');
     edit.className = 'edit'; edit.type = 'button'; edit.textContent = '✎'; edit.title = 'Rename';
     edit.onclick = () => bwRename(row, d);
-    row.append(nm, meta, edit);
+    const del = document.createElement('button');
+    del.className = 'del'; del.type = 'button'; del.title = 'Delete';
+    del.innerHTML = '<svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" ' +
+      'stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polyline points="3 6 5 6 21 6">' +
+      '</polyline><path d="M19 6l-1 14a2 2 0 0 1-2 2H8a2 2 0 0 1-2-2L5 6m3 0V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2">' +
+      '</path></svg>';
+    del.onclick = async () => {
+      if (!confirm('Delete "' + d.name + '" and its values?')) return;
+      try { await fetch('/bloodwork/documents/' + d.id, { method: 'DELETE' }); } catch (e) {}
+      await loadBwDocs();
+      bwSetMsg('Deleted "' + d.name + '".', '');
+    };
+    row.append(nm, meta, edit, del);
     return row;
   }
 
