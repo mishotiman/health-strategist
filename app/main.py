@@ -243,7 +243,60 @@ async def upload_bloodwork(file: UploadFile = File(...),
         return JSONResponse(status_code=400,
                             content={"status": "bad_file", "metrics_written": 0,
                                      "message": "Please upload a PDF lab report."})
-    return bloodwork.ingest_pdf(user_id, await file.read())
+    result = bloodwork.ingest_pdf(user_id, await file.read())
+    if result.get("status") == "ok":
+        name = os.path.splitext(file.filename or "")[0].strip() or "Bloodwork report"
+        with get_connection() as conn, conn.cursor() as cur:
+            cur.execute(
+                "INSERT INTO bloodwork_documents (user_id, name, report_date, metrics_count) "
+                "VALUES (%s, %s, %s, %s) RETURNING id, uploaded_at",
+                (user_id, name, result.get("report_date"), result.get("metrics_written", 0)),
+            )
+            doc_id, uploaded_at = cur.fetchone()
+            conn.commit()
+        result["document"] = {"id": doc_id, "name": name,
+                              "report_date": result.get("report_date"),
+                              "metrics_count": result.get("metrics_written", 0),
+                              "uploaded_at": uploaded_at.isoformat()}
+    return result
+
+
+@app.get("/bloodwork/documents")
+def list_bloodwork_documents(user_id: int = Depends(current_user_id)):
+    """Bloodwork reports the current user has uploaded (for the upload manager)."""
+    with get_connection() as conn, conn.cursor() as cur:
+        cur.execute(
+            "SELECT id, name, report_date, metrics_count, uploaded_at "
+            "FROM bloodwork_documents WHERE user_id = %s ORDER BY uploaded_at DESC",
+            (user_id,),
+        )
+        cols = [d[0] for d in cur.description]
+        rows = [dict(zip(cols, r)) for r in cur.fetchall()]
+    for r in rows:
+        r["report_date"] = r["report_date"].isoformat() if r["report_date"] else None
+        r["uploaded_at"] = r["uploaded_at"].isoformat()
+    return {"documents": rows}
+
+
+class RenameRequest(BaseModel):
+    name: str
+
+
+@app.patch("/bloodwork/documents/{doc_id}")
+def rename_bloodwork_document(doc_id: int, req: RenameRequest,
+                              user_id: int = Depends(current_user_id)):
+    name = req.name.strip()
+    if not name:
+        return JSONResponse(status_code=400, content={"error": "name cannot be empty"})
+    with get_connection() as conn, conn.cursor() as cur:
+        # scoped to the current user, so you can only rename your own documents
+        cur.execute("UPDATE bloodwork_documents SET name = %s WHERE id = %s AND user_id = %s",
+                    (name, doc_id, user_id))
+        updated = cur.rowcount
+        conn.commit()
+    if not updated:
+        return JSONResponse(status_code=404, content={"error": "document not found"})
+    return {"ok": True, "id": doc_id, "name": name}
 
 
 # ---- agent -----------------------------------------------------------------

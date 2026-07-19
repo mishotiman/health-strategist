@@ -82,6 +82,39 @@
   .modal .actions { display:flex; justify-content:flex-end; gap:10px; margin-top:20px; }
   .modal .ghost { background:transparent; border:1px solid var(--line); color:var(--dim); }
   .modal .ghost:hover { border-color:var(--teal); color:var(--ink); }
+  /* attach menu */
+  .attach-wrap { position:relative; flex:0 0 auto; display:flex; }
+  .menu { position:absolute; bottom:calc(100% + 8px); left:0; background:var(--panel);
+          border:1px solid var(--line); border-radius:10px; padding:6px; min-width:190px;
+          box-shadow:0 10px 30px rgba(0,0,0,.45); z-index:40; }
+  .menu[hidden] { display:none; }
+  .menu-item { display:flex; align-items:center; gap:9px; width:100%; background:transparent;
+               border:none; color:var(--ink); padding:9px 10px; border-radius:7px; font-size:14px;
+               font-weight:400; cursor:pointer; justify-content:flex-start; }
+  .menu-item:hover { background:var(--line); }
+  /* bloodwork manager modal */
+  .modal-head { display:flex; align-items:center; justify-content:space-between; margin-bottom:14px; }
+  .modal-head h2 { margin:0; font-size:18px; }
+  .x { background:transparent; border:none; color:var(--dim); font-size:24px; line-height:1;
+       width:auto; padding:0 4px; cursor:pointer; }
+  .x:hover { color:var(--ink); }
+  .bw-list { display:flex; flex-direction:column; gap:8px; max-height:42vh; overflow-y:auto; margin-bottom:12px; }
+  .bw-item { display:flex; align-items:center; gap:10px; background:var(--bg);
+             border:1px solid var(--line); border-radius:8px; padding:9px 11px; }
+  .bw-item .nm { flex:1; font-size:14px; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
+  .bw-item .meta { color:var(--dim); font-size:12px; flex:0 0 auto; }
+  .bw-item .edit { background:transparent; border:none; color:var(--dim); width:auto;
+                   padding:2px 6px; font-size:15px; cursor:pointer; }
+  .bw-item .edit:hover { color:var(--teal); }
+  .bw-item input.rename { flex:1; background:var(--panel); border:1px solid var(--teal);
+                          color:var(--ink); border-radius:6px; padding:5px 8px; font-size:14px; }
+  .bw-empty { color:var(--dim); font-size:13px; padding:10px 2px; }
+  .bw-msg { min-height:18px; font-size:13px; margin-bottom:12px; }
+  .bw-msg.ok { color:var(--teal); }
+  .bw-msg.err { color:#f87171; }
+  .bw-foot { display:flex; align-items:center; justify-content:space-between; gap:12px; }
+  .bw-formats { color:var(--dim); font-size:12px; }
+  .bw-add { font-size:13px; padding:9px 15px; }
 </style>
 </head>
 <body>
@@ -124,6 +157,21 @@
     </div>
   </div>
 </div>
+<div id="bw-modal" class="overlay" hidden>
+  <div class="modal">
+    <div class="modal-head">
+      <h2>Add bloodwork</h2>
+      <button class="x" id="bw-close" type="button" aria-label="Close">&times;</button>
+    </div>
+    <div id="bw-list" class="bw-list"></div>
+    <div id="bw-msg" class="bw-msg"></div>
+    <div class="bw-foot">
+      <span class="bw-formats">Supported formats: PDF</span>
+      <button id="bw-add" class="bw-add" type="button">+ Add file</button>
+    </div>
+    <input id="bw-file" type="file" accept=".pdf,application/pdf" hidden>
+  </div>
+</div>
 <header>
   <span class="dot"></span>
   <h1>Personal Health Strategist</h1>
@@ -139,8 +187,12 @@
 </div>
 
 <form id="form">
-  <input id="file" type="file" accept=".pdf,application/pdf" hidden>
-  <button id="attach" type="button" class="attach" title="Upload a bloodwork PDF">+</button>
+  <div class="attach-wrap">
+    <button id="attach" type="button" class="attach" title="Add bloodwork">+</button>
+    <div id="attach-menu" class="menu" hidden>
+      <button type="button" class="menu-item" id="menu-add-bw">🩸 Add bloodwork</button>
+    </div>
+  </div>
   <input id="input" autocomplete="off" placeholder="e.g. How's my recovery trending, and how should I train this week?" />
   <button id="send" type="submit">Send</button>
 </form>
@@ -268,36 +320,90 @@
     }
   }
 
-  // ---- bloodwork upload ---------------------------------------------------
-  const fileInput = document.getElementById('file');
-  document.getElementById('attach').onclick = () => fileInput.click();
-  function uploadResult(d) {
-    if (d.status === 'ok') {
-      const list = (d.extracted || [])
-        .map(m => '**' + m.metric_type + '**: ' + m.value + ' ' + m.unit).join(' · ');
-      return '✓ Added **' + d.metrics_written + '** lab value' +
-        (d.metrics_written === 1 ? '' : 's') + ' from your bloodwork' +
-        (d.report_date ? ' (dated ' + d.report_date + ')' : '') + '.' +
-        (list ? '\n\n' + list : '');
-    }
-    return d.message || 'Sorry, I could not process that file.';
+  // ---- bloodwork: attach menu + upload manager ----------------------------
+  const attachBtn = document.getElementById('attach');
+  const attachMenu = document.getElementById('attach-menu');
+  const bwModal = document.getElementById('bw-modal');
+  const bwList = document.getElementById('bw-list');
+  const bwMsg = document.getElementById('bw-msg');
+  const bwFile = document.getElementById('bw-file');
+  const SUPPORTED = ['pdf'];
+
+  // toggle the menu; clicking the button again or anywhere outside closes it
+  attachBtn.onclick = (e) => { e.stopPropagation(); attachMenu.hidden = !attachMenu.hidden; };
+  document.addEventListener('click', (e) => {
+    if (!attachMenu.hidden && !e.target.closest('.attach-wrap')) attachMenu.hidden = true;
+  });
+
+  document.getElementById('menu-add-bw').onclick = () => { attachMenu.hidden = true; openBw(); };
+  document.getElementById('bw-close').onclick = () => { bwModal.hidden = true; };
+  bwModal.addEventListener('click', (e) => { if (e.target === bwModal) bwModal.hidden = true; });
+  document.getElementById('bw-add').onclick = () => bwFile.click();
+
+  function bwSetMsg(text, kind) { bwMsg.textContent = text || ''; bwMsg.className = 'bw-msg' + (kind ? ' ' + kind : ''); }
+
+  async function openBw() { bwSetMsg(''); bwModal.hidden = false; await loadBwDocs(); }
+
+  async function loadBwDocs() {
+    bwList.innerHTML = '<div class="bw-empty">Loading…</div>';
+    let docs = [];
+    try { docs = (await (await fetch('/bloodwork/documents')).json()).documents || []; } catch (e) {}
+    bwList.innerHTML = '';
+    if (!docs.length) { bwList.innerHTML = '<div class="bw-empty">No bloodwork uploaded yet.</div>'; return; }
+    docs.forEach(d => bwList.appendChild(bwRow(d)));
   }
-  fileInput.onchange = async () => {
-    const f = fileInput.files[0];
+
+  function bwRow(d) {
+    const row = document.createElement('div'); row.className = 'bw-item';
+    const nm = document.createElement('span'); nm.className = 'nm'; nm.textContent = d.name;
+    const meta = document.createElement('span'); meta.className = 'meta';
+    meta.textContent = (d.report_date ? d.report_date + ' · ' : '') + d.metrics_count + ' values';
+    const edit = document.createElement('button');
+    edit.className = 'edit'; edit.type = 'button'; edit.textContent = '✎'; edit.title = 'Rename';
+    edit.onclick = () => bwRename(row, d);
+    row.append(nm, meta, edit);
+    return row;
+  }
+
+  function bwRename(row, d) {
+    row.innerHTML = '';
+    const inp = document.createElement('input');
+    inp.className = 'rename'; inp.value = d.name; inp.maxLength = 80;
+    row.appendChild(inp); inp.focus(); inp.select();
+    let closed = false;
+    const done = async (save) => {
+      if (closed) return; closed = true;
+      const name = inp.value.trim();
+      if (save && name && name !== d.name) {
+        try {
+          await fetch('/bloodwork/documents/' + d.id, {
+            method: 'PATCH', headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ name }),
+          });
+          d.name = name;
+        } catch (e) {}
+      }
+      row.replaceWith(bwRow(d));
+    };
+    inp.onkeydown = (e) => { if (e.key === 'Enter') done(true); else if (e.key === 'Escape') done(false); };
+    inp.onblur = () => done(true);
+  }
+
+  bwFile.onchange = async () => {
+    const f = bwFile.files[0];
     if (!f) return;
-    addUser('📎 ' + f.name);
-    const bot = addBot();
-    chat.scrollTop = chat.scrollHeight;
-    const fd = new FormData();
-    fd.append('file', f);
-    fileInput.value = '';
-    try {
-      const res = await fetch('/upload/bloodwork', { method: 'POST', body: fd });
-      bot.innerHTML = marked.parse(uploadResult(await res.json()));
-    } catch (err) {
-      bot.textContent = 'Upload failed: ' + err;
+    const ext = (f.name.split('.').pop() || '').toLowerCase();
+    if (!SUPPORTED.includes(ext)) {
+      bwSetMsg('Please select a supported file. Supported: ' + SUPPORTED.join(', ').toUpperCase(), 'err');
+      bwFile.value = ''; return;
     }
-    chat.scrollTop = chat.scrollHeight;
+    bwSetMsg('Uploading ' + f.name + '…');
+    const fd = new FormData(); fd.append('file', f); bwFile.value = '';
+    try {
+      const d = await (await fetch('/upload/bloodwork', { method: 'POST', body: fd })).json();
+      if (d.status === 'ok') { bwSetMsg('Uploaded bloodwork!', 'ok'); await loadBwDocs(); }
+      else { bwSetMsg(d.message || 'Could not process that file.', 'err'); }
+    } catch (e) { bwSetMsg('Upload failed.', 'err'); }
   };
 
   // ---- chat ---------------------------------------------------------------

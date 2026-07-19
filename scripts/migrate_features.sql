@@ -2,6 +2,16 @@
 ALTER TABLE users ADD COLUMN IF NOT EXISTS display_name TEXT;
 ALTER TABLE users ADD COLUMN IF NOT EXISTS is_demo BOOLEAN NOT NULL DEFAULT false;
 
+-- Uploaded bloodwork reports (metadata; values live in health_metrics).
+CREATE TABLE IF NOT EXISTS bloodwork_documents (
+    id            BIGSERIAL PRIMARY KEY,
+    user_id       BIGINT REFERENCES users(id) ON DELETE CASCADE,
+    name          TEXT NOT NULL,
+    report_date   DATE,
+    metrics_count INT NOT NULL DEFAULT 0,
+    uploaded_at   TIMESTAMPTZ NOT NULL DEFAULT now()
+);
+
 -- Durable observations the agent learns about the user over conversations (item 4).
 CREATE TABLE IF NOT EXISTS profile_notes (
     id         BIGSERIAL PRIMARY KEY,

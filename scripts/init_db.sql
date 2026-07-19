@@ -43,6 +43,16 @@ CREATE TABLE IF NOT EXISTS whoop_oauth_states (
     created_at  TIMESTAMPTZ NOT NULL DEFAULT now()
 );
 
+-- Uploaded bloodwork reports (metadata; the values land in health_metrics).
+CREATE TABLE IF NOT EXISTS bloodwork_documents (
+    id            BIGSERIAL PRIMARY KEY,
+    user_id       BIGINT REFERENCES users(id) ON DELETE CASCADE,
+    name          TEXT NOT NULL,
+    report_date   DATE,
+    metrics_count INT NOT NULL DEFAULT 0,
+    uploaded_at   TIMESTAMPTZ NOT NULL DEFAULT now()
+);
+
 -- Normalized wearable / bloodwork metrics ("any source, one schema") ------
 CREATE TABLE IF NOT EXISTS health_metrics (
     id          BIGSERIAL PRIMARY KEY,
