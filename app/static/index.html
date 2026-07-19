@@ -60,9 +60,67 @@
   ::-webkit-scrollbar-track { background:transparent; }
   ::-webkit-scrollbar-thumb { background:#2b3a49; border-radius:6px; border:2px solid var(--bg); }
   ::-webkit-scrollbar-thumb:hover { background:#3a4f63; }
+  /* onboarding modal */
+  .overlay { position:fixed; inset:0; background:rgba(6,11,17,.72); display:flex;
+             align-items:center; justify-content:center; z-index:50; padding:20px; }
+  .overlay[hidden] { display:none; }
+  .modal { background:var(--panel); border:1px solid var(--line); border-radius:14px;
+           padding:22px 24px; width:100%; max-width:440px; max-height:90vh; overflow-y:auto; }
+  .modal h2 { margin:0 0 4px; font-size:18px; }
+  .modal p { margin:0 0 16px; color:var(--dim); font-size:13px; }
+  .modal .fields { display:flex; flex-direction:column; gap:12px; }
+  .modal label { display:flex; flex-direction:column; gap:5px; font-size:12px; color:var(--dim); }
+  .modal .row { display:flex; gap:12px; }
+  .modal .row label { flex:1; }
+  .modal input, .modal select, .modal textarea { background:var(--bg); border:1px solid var(--line);
+           color:var(--ink); border-radius:8px; padding:9px 11px; font-size:14px; font-family:inherit; width:100%; }
+  .modal input:focus, .modal select:focus, .modal textarea:focus { outline:none; border-color:var(--teal); }
+  .modal textarea { resize:vertical; }
+  .modal .actions { display:flex; justify-content:flex-end; gap:10px; margin-top:20px; }
+  .modal .ghost { background:transparent; border:1px solid var(--line); color:var(--dim); }
+  .modal .ghost:hover { border-color:var(--teal); color:var(--ink); }
 </style>
 </head>
 <body>
+<div id="onboard" class="overlay" hidden>
+  <div class="modal">
+    <h2>Personalize your strategy</h2>
+    <p>For more personalized responses, please fill in the following fields:</p>
+    <div class="fields">
+      <label>Goals
+        <textarea id="ob-goals" rows="2" placeholder="e.g. build strength, sleep better, run a half-marathon"></textarea>
+      </label>
+      <div class="row">
+        <label>Sex
+          <select id="ob-sex">
+            <option value="">—</option>
+            <option value="male">Male</option>
+            <option value="female">Female</option>
+            <option value="other">Other</option>
+          </select>
+        </label>
+        <label>Birth year
+          <input id="ob-birth" type="number" min="1920" max="2015" placeholder="1992">
+        </label>
+      </div>
+      <div class="row">
+        <label>Height (cm)
+          <input id="ob-height" type="number" min="100" max="250" placeholder="180">
+        </label>
+        <label>Weight (kg)
+          <input id="ob-weight" type="number" min="30" max="300" placeholder="78">
+        </label>
+      </div>
+      <label>Injuries / limitations
+        <input id="ob-injuries" type="text" placeholder="e.g. lower-back tightness">
+      </label>
+    </div>
+    <div class="actions">
+      <button id="ob-skip" class="ghost" type="button">Skip for now</button>
+      <button id="ob-save" type="button">Save</button>
+    </div>
+  </div>
+</div>
 <header>
   <span class="dot"></span>
   <h1>Personal Health Strategist</h1>
@@ -132,10 +190,36 @@
     } catch (e) { statusEl.textContent = ''; }
   }
 
+  // ---- first-visit onboarding prompt --------------------------------------
+  const onboard = document.getElementById('onboard');
+  function closeOnboarding() {
+    localStorage.setItem('phs_onboarded', '1');
+    onboard.hidden = true;
+  }
+  document.getElementById('ob-skip').onclick = closeOnboarding;
+  document.getElementById('ob-save').onclick = async () => {
+    const str = (id) => document.getElementById(id).value.trim() || null;
+    const num = (id) => { const v = document.getElementById(id).value; return v ? Number(v) : null; };
+    const body = {
+      goals: str('ob-goals'), sex: str('ob-sex'), birth_year: num('ob-birth'),
+      height_cm: num('ob-height'), weight_kg: num('ob-weight'), injuries: str('ob-injuries'),
+    };
+    try {
+      await fetch('/profile', { method: 'POST', headers: { 'Content-Type': 'application/json' },
+                                body: JSON.stringify(body) });
+      statusEl.textContent = '✓ Saved — responses will use your profile.';
+      statusEl.className = 'ok';
+      statusEl.style.opacity = '1';
+      setTimeout(() => { statusEl.style.opacity = '0'; }, 4000);
+    } catch (e) {}
+    closeOnboarding();
+  };
+
   (async () => {
     try { me = await (await fetch('/me')).json(); } catch (e) {}
     renderWho();
     await syncStatus();
+    if (!localStorage.getItem('phs_onboarded')) onboard.hidden = false;
   })();
 
   // ---- render helpers -----------------------------------------------------

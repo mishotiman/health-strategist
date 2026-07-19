@@ -131,6 +131,37 @@ def logout(response: Response):
     return {"ok": True}
 
 
+class ProfileRequest(BaseModel):
+    goals: str | None = None
+    sex: str | None = None
+    birth_year: int | None = None
+    height_cm: float | None = None
+    weight_kg: float | None = None
+    injuries: str | None = None
+
+
+@app.post("/profile")
+def update_profile(req: ProfileRequest, user_id: int = Depends(current_user_id)):
+    """Save the profile the onboarding prompt collects, for the current user.
+    The agent's `memory` tool reads it to personalize responses."""
+    with get_connection() as conn, conn.cursor() as cur:
+        cur.execute(
+            "UPDATE profiles SET goals=%s, sex=%s, birth_year=%s, height_cm=%s, "
+            "weight_kg=%s, injuries=%s, updated_at=now() WHERE user_id=%s",
+            (req.goals, req.sex, req.birth_year, req.height_cm,
+             req.weight_kg, req.injuries, user_id),
+        )
+        if cur.rowcount == 0:
+            cur.execute(
+                "INSERT INTO profiles (user_id, goals, sex, birth_year, height_cm, weight_kg, injuries)"
+                " VALUES (%s,%s,%s,%s,%s,%s,%s)",
+                (user_id, req.goals, req.sex, req.birth_year,
+                 req.height_cm, req.weight_kg, req.injuries),
+            )
+        conn.commit()
+    return {"ok": True}
+
+
 # ---- RAG -------------------------------------------------------------------
 @app.post("/search")
 def search(req: AskRequest):
