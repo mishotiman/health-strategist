@@ -231,6 +231,10 @@
   const threadId = 'web-' + Math.random().toString(36).slice(2, 10);
 
   marked.setOptions({ breaks: true });
+  // Disable Markdown strikethrough: the agent writes "~" for "approximately"
+  // (e.g. "~30 ng/mL"), and GFM would otherwise read a pair of tildes as
+  // strikethrough and cross out the text between them. Tables/links unaffected.
+  marked.use({ tokenizer: { del() {} } });
 
   // ---- who is connected? (demo user by default, or the logged-in account) --
   let me = { name: 'Demo User', is_demo: true };
