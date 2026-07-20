@@ -334,7 +334,7 @@ def extract_metrics(text: str) -> dict:
         msg = _claude.messages.create(
             model=EXTRACT_MODEL,
             max_tokens=8192,
-            thinking={"type": "disabled"},
+            thinking={"type": "disabled"}, # Disable adaptive thinking of Sonnet 5.
             output_config={"format": {"type": "json_schema", "schema": _SCHEMA}},
             messages=[{"role": "user", "content": prompt}],
         )

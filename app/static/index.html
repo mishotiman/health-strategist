@@ -112,9 +112,14 @@
   .bw-item input.rename { flex:1; background:var(--panel); border:1px solid var(--teal);
                           color:var(--ink); border-radius:6px; padding:5px 8px; font-size:14px; }
   .bw-empty { color:var(--dim); font-size:13px; padding:10px 2px; }
-  .bw-msg { min-height:18px; font-size:13px; margin-bottom:12px; }
+  .bw-status { display:flex; align-items:center; gap:8px; min-height:18px; margin-bottom:12px; }
+  .bw-msg { font-size:13px; }
   .bw-msg.ok { color:var(--teal); }
   .bw-msg.err { color:#f87171; }
+  .spinner { display:inline-block; width:14px; height:14px; border:2px solid rgba(45,212,191,.25);
+             border-top-color:var(--teal); border-radius:50%; animation:spin .7s linear infinite; flex:0 0 auto; }
+  .spinner[hidden] { display:none; }
+  @keyframes spin { to { transform:rotate(360deg); } }
   .modal-head h2 .fmt { font-style:italic; font-weight:400; color:var(--dim); font-size:14px; }
   .bw-foot { display:flex; align-items:center; justify-content:flex-end; gap:12px; }
   .bw-add { font-size:13px; padding:9px 15px; }
@@ -171,7 +176,10 @@
       <button class="x" id="bw-close" type="button" aria-label="Close">&times;</button>
     </div>
     <div id="bw-list" class="bw-list"></div>
-    <div id="bw-msg" class="bw-msg"></div>
+    <div class="bw-status">
+      <span id="bw-spinner" class="spinner" hidden></span>
+      <span id="bw-msg" class="bw-msg"></span>
+    </div>
     <div class="bw-foot">
       <button id="bw-add" class="bw-add" type="button">+ Add file</button>
     </div>
@@ -342,6 +350,7 @@
   const bwList = document.getElementById('bw-list');
   const bwMsg = document.getElementById('bw-msg');
   const bwFile = document.getElementById('bw-file');
+  const bwSpinner = document.getElementById('bw-spinner');
   const SUPPORTED = ['pdf'];
 
   // toggle the menu; clicking the button again or anywhere outside closes it
@@ -444,6 +453,7 @@
       bwSetMsg('Please select a supported file. Supported: ' + SUPPORTED.join(', ').toUpperCase(), 'err');
       bwFile.value = ''; return;
     }
+    bwSpinner.hidden = false;
     bwSetMsg('Uploading ' + f.name + '… this can take a few seconds.');
     const fd = new FormData(); fd.append('file', f); bwFile.value = '';
     try {
@@ -453,7 +463,11 @@
       if (d && d.status === 'ok') { bwSetMsg('Uploaded bloodwork!', 'ok'); await loadBwDocs(); }
       else if (d && d.message) { bwSetMsg(d.message, 'err'); }
       else { bwSetMsg('Upload failed — please try again.', 'err'); }
-    } catch (e) { bwSetMsg('Upload failed — check your connection and try again.', 'err'); }
+    } catch (e) {
+      bwSetMsg('Upload failed — check your connection and try again.', 'err');
+    } finally {
+      bwSpinner.hidden = true;
+    }
   };
 
   // ---- chat ---------------------------------------------------------------
