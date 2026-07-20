@@ -243,22 +243,28 @@ async def upload_bloodwork(file: UploadFile = File(...),
         return JSONResponse(status_code=400,
                             content={"status": "bad_file", "metrics_written": 0,
                                      "message": "Please upload a PDF lab report."})
-    result = bloodwork.ingest_pdf(user_id, await file.read())
-    if result.get("status") == "ok":
-        name = os.path.splitext(file.filename or "")[0].strip() or "Bloodwork report"
-        with get_connection() as conn, conn.cursor() as cur:
-            cur.execute(
-                "INSERT INTO bloodwork_documents (user_id, name, report_date, metrics_count) "
-                "VALUES (%s, %s, %s, %s) RETURNING id, uploaded_at",
-                (user_id, name, result.get("report_date"), result.get("metrics_written", 0)),
-            )
-            doc_id, uploaded_at = cur.fetchone()
-            conn.commit()
-        result["document"] = {"id": doc_id, "name": name,
-                              "report_date": result.get("report_date"),
-                              "metrics_count": result.get("metrics_written", 0),
-                              "uploaded_at": uploaded_at.isoformat()}
-    return result
+    try:
+        result = bloodwork.ingest_pdf(user_id, await file.read())
+        if result.get("status") == "ok":
+            name = os.path.splitext(file.filename or "")[0].strip() or "Bloodwork report"
+            with get_connection() as conn, conn.cursor() as cur:
+                cur.execute(
+                    "INSERT INTO bloodwork_documents (user_id, name, report_date, metrics_count) "
+                    "VALUES (%s, %s, %s, %s) RETURNING id, uploaded_at",
+                    (user_id, name, result.get("report_date"), result.get("metrics_written", 0)),
+                )
+                doc_id, uploaded_at = cur.fetchone()
+                conn.commit()
+            result["document"] = {"id": doc_id, "name": name,
+                                  "report_date": result.get("report_date"),
+                                  "metrics_count": result.get("metrics_written", 0),
+                                  "uploaded_at": uploaded_at.isoformat()}
+        return result
+    except Exception:  # never surface a bare 500 to the uploader
+        return JSONResponse(status_code=200,
+                            content={"status": "error", "metrics_written": 0,
+                                     "message": "Something went wrong processing that file — "
+                                                "please try again."})
 
 
 @app.get("/bloodwork/documents")

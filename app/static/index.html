@@ -444,13 +444,16 @@
       bwSetMsg('Please select a supported file. Supported: ' + SUPPORTED.join(', ').toUpperCase(), 'err');
       bwFile.value = ''; return;
     }
-    bwSetMsg('Uploading ' + f.name + '…');
+    bwSetMsg('Uploading ' + f.name + '… this can take a few seconds.');
     const fd = new FormData(); fd.append('file', f); bwFile.value = '';
     try {
-      const d = await (await fetch('/upload/bloodwork', { method: 'POST', body: fd })).json();
-      if (d.status === 'ok') { bwSetMsg('Uploaded bloodwork!', 'ok'); await loadBwDocs(); }
-      else { bwSetMsg(d.message || 'Could not process that file.', 'err'); }
-    } catch (e) { bwSetMsg('Upload failed.', 'err'); }
+      const res = await fetch('/upload/bloodwork', { method: 'POST', body: fd });
+      let d = null;
+      try { d = await res.json(); } catch (e) {}
+      if (d && d.status === 'ok') { bwSetMsg('Uploaded bloodwork!', 'ok'); await loadBwDocs(); }
+      else if (d && d.message) { bwSetMsg(d.message, 'err'); }
+      else { bwSetMsg('Upload failed — please try again.', 'err'); }
+    } catch (e) { bwSetMsg('Upload failed — check your connection and try again.', 'err'); }
   };
 
   // ---- chat ---------------------------------------------------------------

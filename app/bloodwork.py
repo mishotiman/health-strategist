@@ -33,6 +33,10 @@ from app.ingestion import CANONICAL_UNITS, upsert_metrics
 _claude = anthropic.Anthropic()
 EXTRACT_MODEL = "claude-sonnet-5"  # stronger reader for messy layouts
 
+
+class ExtractionError(RuntimeError):
+    """The model returned no usable JSON (empty or truncated response)."""
+
 # --------------------------------------------------------------------------- #
 # Marker catalogue — the single source of truth for numeric bloodwork markers.
 #   unit    : canonical unit (what we store)
@@ -321,14 +325,27 @@ def extract_metrics(text: str) -> dict:
         "documents, return metrics: [], qualitative: [], report_date: ''.\n\n"
         f"DOCUMENT TEXT:\n{text}"
     )
-    msg = _claude.messages.create(
-        model=EXTRACT_MODEL,
-        max_tokens=4096,
-        output_config={"format": {"type": "json_schema", "schema": _SCHEMA}},
-        messages=[{"role": "user", "content": prompt}],
-    )
-    raw = "".join(b.text for b in msg.content if b.type == "text")
-    return json.loads(raw)
+    # Mechanical extraction: disable thinking (Sonnet 5 runs it by default, which
+    # can consume the token budget and leave the JSON empty/truncated) and give a
+    # generous ceiling so a large panel's JSON always fits. Retry once — model
+    # output is very occasionally empty.
+    stop = None
+    for _ in range(2):
+        msg = _claude.messages.create(
+            model=EXTRACT_MODEL,
+            max_tokens=8192,
+            thinking={"type": "disabled"},
+            output_config={"format": {"type": "json_schema", "schema": _SCHEMA}},
+            messages=[{"role": "user", "content": prompt}],
+        )
+        stop = msg.stop_reason
+        raw = "".join(b.text for b in msg.content if b.type == "text").strip()
+        if raw:
+            try:
+                return json.loads(raw)
+            except json.JSONDecodeError:
+                pass  # truncated/garbled — retry once
+    raise ExtractionError(f"no parseable result from the extractor (stop_reason={stop})")
 
 
 def ingest_pdf(user_id: int, pdf_bytes: bytes) -> dict:
@@ -338,7 +355,11 @@ def ingest_pdf(user_id: int, pdf_bytes: bytes) -> dict:
                 "message": "I couldn't read any text from that PDF. If it's a scanned "
                            "image, try a text-based export of your lab report."}
 
-    extracted = extract_metrics(text)
+    try:
+        extracted = extract_metrics(text)
+    except (ExtractionError, anthropic.APIError):
+        return {"status": "error", "metrics_written": 0,
+                "message": "I couldn't read that report just now — please try again in a moment."}
     doc_type = extracted.get("document_type", "not_health")
     summary = (extracted.get("document_summary") or "").strip()
 
