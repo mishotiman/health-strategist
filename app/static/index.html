@@ -228,7 +228,17 @@
   const statusEl = document.getElementById('status');
   const who = document.getElementById('who');
   const authbtn = document.getElementById('authbtn');
-  const threadId = 'web-' + Math.random().toString(36).slice(2, 10);
+  // Persist the thread id so the agent keeps its server-side context across reloads.
+  let threadId = localStorage.getItem('phs_thread');
+  if (!threadId) {
+    threadId = 'web-' + Math.random().toString(36).slice(2, 10);
+    localStorage.setItem('phs_thread', threadId);
+  }
+  // Persisted chat transcript (user text + bot responses), restored on reload.
+  function loadHistory() { try { return JSON.parse(localStorage.getItem('phs_chat')) || []; } catch (e) { return []; } }
+  function saveHistory() { try { localStorage.setItem('phs_chat', JSON.stringify(history.slice(-60))); } catch (e) {} }
+  function clearChat() { localStorage.removeItem('phs_chat'); localStorage.removeItem('phs_thread'); }
+  let history = loadHistory();
 
   marked.setOptions({ breaks: true });
   // Disable Markdown strikethrough: the agent writes "~" for "approximately"
@@ -243,11 +253,12 @@
     who.innerHTML = 'Connected: <b class="' + cls + '">' + me.name + '</b>';
     if (me.is_demo) {
       authbtn.textContent = 'Log in with WHOOP';
-      authbtn.onclick = () => { location.href = '/whoop/connect'; };
+      authbtn.onclick = () => { clearChat(); location.href = '/whoop/connect'; };
     } else {
       authbtn.textContent = 'Exit to demo';
       authbtn.onclick = async () => {
         await fetch('/auth/logout', { method: 'POST' });
+        clearChat();
         location.reload();
       };
     }
@@ -346,6 +357,18 @@
       chat.appendChild(t);
     }
   }
+
+  // ---- restore persisted transcript on load -------------------------------
+  (function restoreChat() {
+    if (!history.length) return;
+    const hint = chat.querySelector('.hint');
+    if (hint) hint.remove();
+    history.forEach(m => {
+      if (m.role === 'user') addUser(m.text);
+      else renderBot(addBot(), m.data);
+    });
+    chat.scrollTop = chat.scrollHeight;
+  })();
 
   // ---- bloodwork: attach menu + upload manager ----------------------------
   const attachBtn = document.getElementById('attach');
@@ -481,7 +504,10 @@
     if (!q) return;
     input.value = '';
     send.disabled = true;
+    const hint = chat.querySelector('.hint');
+    if (hint) hint.remove();
     addUser(q);
+    history.push({ role: 'user', text: q }); saveHistory();
     const bot = addBot();
     chat.scrollTop = chat.scrollHeight;
     try {
@@ -490,9 +516,12 @@
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ message: q, thread_id: threadId })
       });
-      renderBot(bot, await res.json());
+      const data = await res.json();
+      renderBot(bot, data);
+      history.push({ role: 'bot', data }); saveHistory();
     } catch (err) {
       bot.textContent = 'Error: ' + err;
+      history.push({ role: 'bot', data: { answer: 'Error: ' + err } }); saveHistory();
     } finally {
       send.disabled = false;
       input.focus();
