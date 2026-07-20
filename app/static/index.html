@@ -44,6 +44,20 @@
   form { display:flex; gap:10px; padding:16px 20px; border-top:1px solid var(--line); max-width:780px; width:100%; margin:0 auto; }
   input { flex:1; background:var(--panel); border:1px solid var(--line); color:var(--ink); border-radius:10px; padding:12px 14px; font-size:15px; }
   input:focus { outline:none; border-color:var(--teal); }
+  /* rotating placeholder overlay (native placeholder can't be animated) */
+  .input-wrap { position:relative; flex:1; display:flex; }
+  .input-wrap input { flex:1; width:100%; }
+  .ph-rotator { position:absolute; left:15px; right:15px; top:1px; bottom:1px;
+                overflow:hidden; pointer-events:none; }
+  .input-wrap.has-text .ph-rotator { display:none; }
+  .ph-text { position:absolute; inset:0; display:flex; align-items:center;
+             color:var(--dim); font-size:15px; }
+  .ph-label { max-width:100%; white-space:nowrap; overflow:hidden; text-overflow:ellipsis; }
+  .ph-text.enter { animation:ph-in .55s cubic-bezier(.22,.61,.36,1) both; }
+  .ph-text.leave { animation:ph-out .55s cubic-bezier(.22,.61,.36,1) both; }
+  @keyframes ph-in  { from { transform:translateY(115%);  opacity:0; } to { transform:translateY(0); opacity:1; } }
+  @keyframes ph-out { from { transform:translateY(0); opacity:1; } to { transform:translateY(-115%); opacity:0; } }
+  @media (prefers-reduced-motion: reduce) { .ph-text.enter, .ph-text.leave { animation-duration:.01ms; } }
   button { background:var(--teal); color:#04201c; border:none; border-radius:10px; padding:0 20px; font-weight:600; cursor:pointer; }
   button:disabled { opacity:.5; cursor:default; }
   .attach { background:var(--panel); border:1px solid var(--line); color:var(--dim);
@@ -198,7 +212,7 @@
 <header>
   <span class="dot"></span>
   <h1>Personal Health Strategist</h1>
-  <span class="sub">Evidence-based health strategy from your own data</span>
+  <span class="sub"></span>
   <span id="who" class="who"></span>
   <button id="authbtn" class="authbtn" type="button"></button>
 </header>
@@ -216,7 +230,10 @@
       <button type="button" class="menu-item" id="menu-add-bw">🩸 Add bloodwork</button>
     </div>
   </div>
-  <input id="input" autocomplete="off" placeholder="e.g. How's my recovery trending, and how should I train this week?" />
+  <div class="input-wrap">
+    <input id="input" autocomplete="off" placeholder="e.g. How's my recovery trending, and how should I train this week?" />
+    <div id="ph-rotator" class="ph-rotator" aria-hidden="true"></div>
+  </div>
   <button id="send" type="submit">Send</button>
 </form>
 
@@ -250,12 +267,12 @@
   let me = { name: 'Demo User', is_demo: true };
   function renderWho() {
     const cls = me.is_demo ? 'demo' : 'live';
-    who.innerHTML = 'Connected: <b class="' + cls + '">' + me.name + '</b>';
+    who.innerHTML = 'User: <b class="' + cls + '">' + me.name + '</b>';
     if (me.is_demo) {
-      authbtn.textContent = 'Log in with WHOOP';
+      authbtn.textContent = 'Connect WHOOP';
       authbtn.onclick = () => { clearChat(); location.href = '/whoop/connect'; };
     } else {
-      authbtn.textContent = 'Exit to demo';
+      authbtn.textContent = 'Disconnect WHOOP';
       authbtn.onclick = async () => {
         await fetch('/auth/logout', { method: 'POST' });
         clearChat();
@@ -497,12 +514,56 @@
     }
   };
 
+  // ---- rotating placeholder questions -------------------------------------
+  // The native <input placeholder> can't be animated, so we overlay our own
+  // rotator: each question slides up and out the top while the next rises in
+  // from the bottom. It hides itself as soon as the user types.
+  const inputWrap = document.querySelector('.input-wrap');
+  const phRotator = document.getElementById('ph-rotator');
+  const PLACEHOLDER_QS = [
+    "How's my recovery trending, and how should I train this week?",
+    'Is my resting heart rate where it should be?',
+    'How much protein should I eat to build strength?',
+    'My sleep has been short lately — how does that affect performance?',
+    'Should I take creatine, and how much?',
+    'Is my vitamin D too low? What does the research say?',
+    'Does caffeine before training actually help?',
+    'How do I use cold-water immersion without blunting muscle growth?',
+    'What can I do this week to improve my HRV?',
+    'Is magnesium worth taking for better sleep?',
+  ];
+  let phIndex = Math.floor(Math.random() * PLACEHOLDER_QS.length);
+  let phCurrent = null;                        // the on-screen question (tracked, not queried)
+  function phMake(q) {
+    const el = document.createElement('span'); el.className = 'ph-text';
+    const lbl = document.createElement('span'); lbl.className = 'ph-label'; lbl.textContent = 'e.g. ' + q;
+    el.appendChild(lbl); return el;
+  }
+  function phRotate() {
+    if (input.value) return;                 // paused while the user is typing
+    phIndex = (phIndex + 1) % PLACEHOLDER_QS.length;
+    const next = phMake(PLACEHOLDER_QS[phIndex]);
+    next.classList.add('enter');
+    phRotator.appendChild(next);
+    const old = phCurrent;                    // supersede exactly one element -> no orphans
+    phCurrent = next;
+    if (old) { old.classList.add('leave'); setTimeout(() => old.remove(), 600); }
+  }
+  input.placeholder = '';                     // hand off to the animated overlay
+  phCurrent = phMake(PLACEHOLDER_QS[phIndex]);
+  phRotator.appendChild(phCurrent);           // first one, no animation
+  setInterval(phRotate, 6000);
+  input.addEventListener('input', () => {
+    inputWrap.classList.toggle('has-text', !!input.value);
+  });
+
   // ---- chat ---------------------------------------------------------------
   form.addEventListener('submit', async (e) => {
     e.preventDefault();
     const q = input.value.trim();
     if (!q) return;
     input.value = '';
+    inputWrap.classList.remove('has-text');   // box empty again -> rotator resumes
     send.disabled = true;
     const hint = chat.querySelector('.hint');
     if (hint) hint.remove();
