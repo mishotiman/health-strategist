@@ -61,6 +61,27 @@ def upsert_metrics(user_id: int, source: str, records: list[dict]) -> int:
     return written
 
 
+def count_for_source(user_id: int, source: str) -> int:
+    with get_connection() as conn, conn.cursor() as cur:
+        cur.execute("SELECT count(*) FROM health_metrics WHERE user_id = %s AND source = %s",
+                    (user_id, source))
+        return cur.fetchone()[0] or 0
+
+
+def delete_metrics(user_id: int, source: str) -> int:
+    """Drop every metric a given source contributed for this user.
+
+    Used when a user replaces a connected account with a different one at the
+    same provider — the old account's readings aren't theirs to keep mixed in.
+    """
+    with get_connection() as conn, conn.cursor() as cur:
+        cur.execute("DELETE FROM health_metrics WHERE user_id = %s AND source = %s",
+                    (user_id, source))
+        removed = cur.rowcount
+        conn.commit()
+    return removed
+
+
 def query_metrics(user_id: int, metric_type: str | None = None, limit: int = 100) -> list[dict]:
     sql = (
         "SELECT source, metric_date, metric_type, value, unit, text_value "

@@ -1,0 +1,704 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>Personal Health Strategist</title>
+    <style>
+      :root {
+        --bg: #0f1720;
+        --panel: #16212e;
+        --line: #26333f;
+        --teal: #2dd4bf;
+        --ink: #e6edf3;
+        --dim: #8aa0b2;
+        --bad: #f87171;
+      }
+      * {
+        box-sizing: border-box;
+      }
+      body {
+        margin: 0;
+        min-height: 100vh;
+        background: var(--bg);
+        color: var(--ink);
+        font-family:
+          system-ui,
+          -apple-system,
+          Segoe UI,
+          Roboto,
+          sans-serif;
+        display: flex;
+        align-items: center;
+        justify-content: center;
+        padding: 24px;
+      }
+      .card {
+        width: 100%;
+        max-width: 380px;
+      }
+      h1 {
+        font-size: 21px;
+        margin: 0 0 8px;
+        font-weight: 600;
+        letter-spacing: -0.01em;
+        text-align: center;
+        line-height: 1.35;
+      }
+      /* a heading with no subtitle under it needs the spacing the .sub would give */
+      h1.solo {
+        margin-bottom: 26px;
+      }
+      .sub {
+        color: var(--dim);
+        font-size: 13px;
+        margin: 0 0 20px;
+        line-height: 1.5;
+        text-align: center;
+      }
+      label {
+        display: block;
+        font-size: 12px;
+        color: var(--dim);
+        margin: 0 0 6px;
+      }
+      /* "Password" and "Forgot password?" share a line, GitHub-style */
+      .label-row {
+        display: flex;
+        align-items: baseline;
+        justify-content: space-between;
+        gap: 12px;
+      }
+      .label-row .link {
+        font-size: 12px;
+      }
+      input {
+        width: 100%;
+        background: var(--panel);
+        border: 1px solid var(--line);
+        color: var(--ink);
+        border-radius: 10px;
+        padding: 11px 13px;
+        font-size: 15px;
+        font-family: inherit;
+      }
+      input:focus {
+        outline: none;
+        border-color: var(--teal);
+      }
+      .field {
+        margin-bottom: 14px;
+      }
+      button {
+        width: 100%;
+        background: var(--teal);
+        color: #04201c;
+        border: none;
+        border-radius: 10px;
+        padding: 12px 18px;
+        font-weight: 600;
+        font-size: 14px;
+        cursor: pointer;
+        font-family: inherit;
+      }
+      button:hover {
+        filter: brightness(1.06);
+      }
+      button:disabled {
+        opacity: 0.55;
+        cursor: default;
+      }
+      .ghost {
+        background: transparent;
+        border: 1px solid var(--line);
+        color: var(--ink);
+      }
+      .ghost:hover {
+        border-color: var(--teal);
+        filter: none;
+      }
+      .oauth {
+        display: flex;
+        flex-direction: column;
+        gap: 9px;
+        margin-bottom: 4px;
+      }
+      .oauth button {
+        display: flex;
+        align-items: center;
+        justify-content: center;
+        gap: 9px;
+      }
+      .oauth button svg {
+        width: 17px;
+        height: 17px;
+        flex: 0 0 auto;
+      }
+      .sep {
+        display: flex;
+        align-items: center;
+        gap: 12px;
+        color: var(--dim);
+        font-size: 11px;
+        margin: 18px 0;
+        text-transform: uppercase;
+        letter-spacing: 0.08em;
+      }
+      .sep::before,
+      .sep::after {
+        content: "";
+        flex: 1;
+        height: 1px;
+        background: var(--line);
+      }
+      /* display:flex above would otherwise beat the browser's [hidden] rule,
+         leaving a stray "or" divider when no providers are configured */
+      .sep[hidden] {
+        display: none;
+      }
+      .row {
+        display: flex;
+        justify-content: space-between;
+        align-items: center;
+        margin-top: 16px;
+        font-size: 13px;
+      }
+      /* stacked, centered entry points under the form */
+      .footer-links {
+        display: flex;
+        flex-direction: column;
+        align-items: center;
+        gap: 15px;
+        margin-top: 22px;
+        font-size: 13px;
+      }
+      /* inherits the teal from .link, matching "Sign up" — just a touch smaller */
+      .footer-links .guest {
+        font-size: 12px;
+      }
+      /* explicit, for the same reason as .sep[hidden] above */
+      #passkey-btn[hidden] {
+        display: none;
+      }
+      a,
+      .link {
+        color: var(--teal);
+        text-decoration: none;
+        cursor: pointer;
+        background: none;
+        border: none;
+        padding: 0;
+        font-size: 13px;
+        font-family: inherit;
+        width: auto;
+        font-weight: 500;
+      }
+      a:hover,
+      .link:hover {
+        text-decoration: underline;
+      }
+      .muted {
+        color: var(--dim);
+      }
+      .msg {
+        font-size: 13px;
+        margin: 0 0 14px;
+        padding: 10px 12px;
+        border-radius: 9px;
+        line-height: 1.45;
+      }
+      .msg.err {
+        background: rgba(248, 113, 113, 0.1);
+        border: 1px solid rgba(248, 113, 113, 0.3);
+        color: #fca5a5;
+      }
+      .msg.ok {
+        background: rgba(45, 212, 191, 0.1);
+        border: 1px solid rgba(45, 212, 191, 0.3);
+        color: var(--teal);
+      }
+      .msg[hidden] {
+        display: none;
+      }
+      .rules {
+        list-style: none;
+        margin: 8px 0 14px;
+        padding: 0;
+        font-size: 12px;
+        color: var(--dim);
+      }
+      .rules li {
+        display: flex;
+        align-items: center;
+        gap: 8px;
+        padding: 2px 0;
+      }
+      .rules li::before {
+        content: "○";
+        font-size: 11px;
+        width: 12px;
+      }
+      .rules li.met {
+        color: var(--teal);
+      }
+      .rules li.met::before {
+        content: "●";
+      }
+      .view[hidden] {
+        display: none;
+      }
+      /* guest notice */
+      .overlay {
+        position: fixed;
+        inset: 0;
+        background: rgba(6, 11, 17, 0.75);
+        display: flex;
+        align-items: center;
+        justify-content: center;
+        padding: 20px;
+        z-index: 20;
+      }
+      .overlay[hidden] {
+        display: none;
+      }
+      .modal {
+        background: var(--panel);
+        border: 1px solid var(--line);
+        border-radius: 14px;
+        padding: 22px 24px;
+        max-width: 400px;
+      }
+      .modal h2 {
+        font-size: 16px;
+        margin: 0 0 10px;
+      }
+      .modal p {
+        font-size: 13px;
+        color: var(--dim);
+        line-height: 1.6;
+        margin: 0 0 18px;
+      }
+      .modal .actions {
+        display: flex;
+        gap: 10px;
+      }
+    </style>
+  </head>
+  <body>
+    <div class="card">
+      <div id="msg" class="msg" hidden></div>
+
+      <!-- ---------- sign in ---------- -->
+      <div id="v-signin" class="view">
+        <h1 class="solo">
+          Sign in to <i>your</i> Personal Health Strategist
+        </h1>
+        <form id="f-signin">
+          <div class="field">
+            <label for="si-email">Email</label>
+            <input id="si-email" type="email" autocomplete="email" required />
+          </div>
+          <div class="field">
+            <div class="label-row">
+              <label for="si-pw">Password</label>
+              <!-- type=button: inside a form, a bare button would submit it -->
+              <button class="link" type="button" data-view="forgot">
+                Forgot password?
+              </button>
+            </div>
+            <input
+              id="si-pw"
+              type="password"
+              autocomplete="current-password"
+              required
+            />
+          </div>
+          <button type="submit">Sign in</button>
+        </form>
+        <div id="oauth-sep" class="sep" hidden>or</div>
+        <div id="oauth" class="oauth"></div>
+        <div class="footer-links">
+          <span class="muted"
+            >New to PHS?
+            <button class="link" type="button" data-view="signup">
+              Sign up</button
+            ></span
+          >
+          <button class="link" type="button" id="passkey-btn" hidden>
+            Sign in with a passkey
+          </button>
+          <button class="link guest" type="button" id="try-btn">
+            Try PHS as a guest &rarr;
+          </button>
+        </div>
+      </div>
+
+      <!-- ---------- sign up ---------- -->
+      <div id="v-signup" class="view" hidden>
+        <h1>Sign up for <i>your</i> Personal Health Strategist</h1>
+        <p class="sub">
+          Just an email and a password &mdash; we'll get to know you next.
+        </p>
+        <form id="f-signup">
+          <div class="field">
+            <label for="su-email">Email</label>
+            <input id="su-email" type="email" autocomplete="email" required />
+          </div>
+          <div class="field">
+            <label for="su-pw">Password</label>
+            <input
+              id="su-pw"
+              type="password"
+              autocomplete="new-password"
+              required
+            />
+          </div>
+          <ul id="rules" class="rules"></ul>
+          <button type="submit">Create account</button>
+        </form>
+        <div id="oauth-sep2" class="sep" hidden>or</div>
+        <div id="oauth2" class="oauth"></div>
+        <div class="footer-links">
+          <span class="muted"
+            >Already have an account?
+            <button class="link" type="button" data-view="signin">
+              Sign in</button
+            ></span
+          >
+        </div>
+      </div>
+
+      <!-- ---------- forgot ---------- -->
+      <div id="v-forgot" class="view" hidden>
+        <h1>Reset your password</h1>
+        <p class="sub">
+          Enter your email and we'll send you a link to choose a new password.
+        </p>
+        <form id="f-forgot">
+          <div class="field">
+            <label for="fp-email">Email</label>
+            <input id="fp-email" type="email" autocomplete="email" required />
+          </div>
+          <button type="submit">Send reset link</button>
+        </form>
+        <div class="row">
+          <button class="link" data-view="signin">
+            &larr; Back to sign in
+          </button>
+        </div>
+      </div>
+
+      <!-- ---------- choose a new password ---------- -->
+      <div id="v-reset" class="view" hidden>
+        <h1>Choose a new password</h1>
+        <p class="sub">This also signs you out everywhere else.</p>
+        <form id="f-reset">
+          <div class="field">
+            <label for="rs-pw">New password</label>
+            <input
+              id="rs-pw"
+              type="password"
+              autocomplete="new-password"
+              required
+            />
+          </div>
+          <ul id="rules2" class="rules"></ul>
+          <button type="submit">Set new password</button>
+        </form>
+      </div>
+
+      <!-- ---------- verify your email ---------- -->
+      <div id="v-verify" class="view" hidden>
+        <h1>Check your email</h1>
+        <p class="sub">
+          We sent a verification link to <b id="verify-email">your address</b>.
+          Click it to activate your account &mdash; then you can finish setting
+          up.
+        </p>
+        <button id="resend" class="ghost">Resend the link</button>
+        <div class="row">
+          <button class="link" id="verify-signout">
+            Use a different account
+          </button>
+        </div>
+      </div>
+    </div>
+
+    <!-- guest notice -->
+    <div id="guest-modal" class="overlay" hidden>
+      <div class="modal">
+        <h2>Explore Personal Health Strategist</h2>
+        <p>
+          You're about to explore Personal Health Strategist with a sample
+          dataset. <b>None of your actions will be saved</b> &mdash; your
+          conversation disappears when you leave, and you can't upload data or
+          connect WHOOP. Create an account any time to keep your chat history
+          and gain full functionality.
+        </p>
+        <div class="actions">
+          <button class="ghost" id="guest-cancel">Cancel</button>
+          <button id="guest-ok">I understand</button>
+        </div>
+      </div>
+    </div>
+
+    <script>
+      const $ = (id) => document.getElementById(id);
+      const msg = $("msg");
+      const params = new URLSearchParams(location.search);
+
+      function show(view) {
+        document.querySelectorAll(".view").forEach((v) => {
+          v.hidden = true;
+        });
+        $("v-" + view).hidden = false;
+        setMsg("");
+      }
+      function setMsg(text, kind) {
+        msg.textContent = text || "";
+        msg.className = "msg" + (kind ? " " + kind : "");
+        msg.hidden = !text;
+      }
+      document.querySelectorAll("[data-view]").forEach((b) => {
+        b.onclick = () => show(b.dataset.view);
+      });
+
+      // ---- password rules: the server is authoritative, this mirrors it live ----
+      const CHECKS = {
+        length: (p) => p.length >= 10,
+        capital: (p) => /[A-Z]/.test(p),
+        number: (p) => /[0-9]/.test(p),
+        special: (p) => /[^A-Za-z0-9\s]/.test(p),
+      };
+      let RULES = [];
+      function renderRules(listEl, pw) {
+        listEl.innerHTML = "";
+        RULES.forEach((r) => {
+          const li = document.createElement("li");
+          li.textContent = r.label;
+          if (CHECKS[r.key] && CHECKS[r.key](pw)) li.classList.add("met");
+          listEl.appendChild(li);
+        });
+      }
+      fetch("/auth/password-rules")
+        .then((r) => r.json())
+        .then((d) => {
+          RULES = d.rules || [];
+          renderRules($("rules"), "");
+          renderRules($("rules2"), "");
+        })
+        .catch(() => {});
+      $("su-pw").addEventListener("input", (e) =>
+        renderRules($("rules"), e.target.value),
+      );
+      $("rs-pw").addEventListener("input", (e) =>
+        renderRules($("rules2"), e.target.value),
+      );
+
+      // ---- external providers --------------------------------------------------
+      // Brand marks are inlined so the page makes no external requests (same
+      // reasoning as vendoring marked.min.js locally).
+      const ICONS = {
+        google:
+          '<svg viewBox="0 0 24 24" aria-hidden="true">' +
+          '<path fill="#4285F4" d="M23.52 12.27c0-.79-.07-1.54-.2-2.27H12v4.51h6.47a5.54 5.54 0 0 1-2.4 3.64v3.02h3.88c2.27-2.09 3.57-5.17 3.57-8.9z"/>' +
+          '<path fill="#34A853" d="M12 24c3.24 0 5.96-1.08 7.95-2.91l-3.88-3.01c-1.08.72-2.45 1.16-4.07 1.16-3.13 0-5.78-2.11-6.73-4.96H1.26v3.09A12 12 0 0 0 12 24z"/>' +
+          '<path fill="#FBBC05" d="M5.27 14.28a7.2 7.2 0 0 1 0-4.56V6.63H1.26a12 12 0 0 0 0 10.74l4.01-3.09z"/>' +
+          '<path fill="#EA4335" d="M12 4.75c1.77 0 3.35.61 4.6 1.8l3.44-3.44C17.95 1.19 15.24 0 12 0A12 12 0 0 0 1.26 6.63l4.01 3.09C6.22 6.86 8.87 4.75 12 4.75z"/>' +
+          "</svg>",
+        microsoft:
+          '<svg viewBox="0 0 23 23" aria-hidden="true">' +
+          '<path fill="#F25022" d="M1 1h10v10H1z"/>' +
+          '<path fill="#7FBA00" d="M12 1h10v10H12z"/>' +
+          '<path fill="#00A4EF" d="M1 12h10v10H1z"/>' +
+          '<path fill="#FFB900" d="M12 12h10v10H12z"/>' +
+          "</svg>",
+      };
+      fetch("/auth/providers")
+        .then((r) => r.json())
+        .then((d) => {
+          // WebAuthn lands in a follow-up; until then the server reports false
+          // and the passkey entry point stays hidden rather than dead.
+          if (d.passkeys) $("passkey-btn").hidden = false;
+
+          const list = d.providers || [];
+          if (!list.length) return;
+          [
+            ["oauth", "oauth-sep"],
+            ["oauth2", "oauth-sep2"],
+          ].forEach(([boxId, sepId]) => {
+            const box = $(boxId);
+            list.forEach((p) => {
+              const b = document.createElement("button");
+              b.type = "button";
+              b.className = "ghost";
+              b.innerHTML = ICONS[p.provider] || "";
+              b.appendChild(
+                document.createTextNode("Continue with " + p.label),
+              );
+              b.onclick = () => {
+                location.href = "/auth/oauth/" + p.provider + "/start";
+              };
+              box.appendChild(b);
+            });
+            $(sepId).hidden = false;
+          });
+        })
+        .catch(() => {});
+
+      async function post(url, body) {
+        const res = await fetch(url, {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify(body || {}),
+        });
+        let data = null;
+        try {
+          data = await res.json();
+        } catch (e) {}
+        return { ok: res.ok, status: res.status, data };
+      }
+      function errorText(data, fallback) {
+        const d = data && data.detail;
+        if (!d) return fallback;
+        if (typeof d === "string") return d;
+        if (d.error === "password_policy") {
+          const failed = new Set(d.failed || []);
+          const labels = (d.rules || [])
+            .filter((r) => failed.has(r.key))
+            .map((r) => r.label.toLowerCase());
+          return "Your password still needs: " + labels.join(", ") + ".";
+        }
+        return fallback;
+      }
+
+      // ---- sign in -------------------------------------------------------------
+      $("f-signin").onsubmit = async (e) => {
+        e.preventDefault();
+        setMsg("");
+        const r = await post("/auth/login", {
+          email: $("si-email").value,
+          password: $("si-pw").value,
+        });
+        if (!r.ok)
+          return setMsg(
+            errorText(r.data, "Incorrect email or password."),
+            "err",
+          );
+        if (!r.data.email_verified) return showVerify($("si-email").value);
+        location.href = r.data.onboarded ? "/?welcome=1" : "/onboarding";
+      };
+
+      // ---- sign up -------------------------------------------------------------
+      $("f-signup").onsubmit = async (e) => {
+        e.preventDefault();
+        setMsg("");
+        const email = $("su-email").value;
+        const r = await post("/auth/register", {
+          email,
+          password: $("su-pw").value,
+        });
+        if (!r.ok)
+          return setMsg(
+            errorText(r.data, "Could not create that account."),
+            "err",
+          );
+        showVerify(email);
+      };
+
+      // ---- verification --------------------------------------------------------
+      function showVerify(email) {
+        show("verify");
+        if (email) $("verify-email").textContent = email;
+        setMsg("Account created. Verify your email to continue.", "ok");
+      }
+      $("resend").onclick = async () => {
+        const r = await post("/auth/resend-verification");
+        setMsg(
+          r.ok
+            ? "Sent — check your inbox again."
+            : "Could not resend right now.",
+          r.ok ? "ok" : "err",
+        );
+      };
+      $("verify-signout").onclick = async () => {
+        await post("/auth/logout");
+        show("signin");
+      };
+
+      // ---- forgot / reset ------------------------------------------------------
+      $("f-forgot").onsubmit = async (e) => {
+        e.preventDefault();
+        await post("/auth/forgot-password", { email: $("fp-email").value });
+        // Always the same answer: revealing which addresses exist would leak the user list.
+        setMsg(
+          "If that address has an account, a reset link is on its way.",
+          "ok",
+        );
+      };
+      $("f-reset").onsubmit = async (e) => {
+        e.preventDefault();
+        const r = await post("/auth/reset-password", {
+          token: params.get("reset"),
+          new_password: $("rs-pw").value,
+        });
+        if (!r.ok)
+          return setMsg(
+            errorText(r.data, "That reset link is invalid or expired."),
+            "err",
+          );
+        location.href = "/?welcome=1";
+      };
+
+      // ---- guest ---------------------------------------------------------------
+      const guestModal = $("guest-modal");
+      $("try-btn").onclick = () => {
+        guestModal.hidden = false;
+      };
+      $("guest-cancel").onclick = () => {
+        guestModal.hidden = true;
+      };
+      $("guest-ok").onclick = async () => {
+        const r = await post("/auth/guest");
+        if (!r.ok) {
+          guestModal.hidden = true;
+          return setMsg("Sample data is unavailable right now.", "err");
+        }
+        try {
+          localStorage.removeItem("phs_chat");
+          localStorage.removeItem("phs_thread");
+        } catch (e) {}
+        location.href = "/";
+      };
+
+      // ---- initial view --------------------------------------------------------
+      (async () => {
+        if (params.get("reset")) return show("reset");
+        if (params.get("verify") === "pending") {
+          try {
+            const me = await (await fetch("/me")).json();
+            showVerify(me.email);
+            setMsg("Verify your email to continue.", "ok");
+          } catch (e) {
+            show("signin");
+          }
+          return;
+        }
+        show("signin");
+        if (params.get("verify") === "invalid")
+          setMsg(
+            "That verification link is invalid or has already been used.",
+            "err",
+          );
+        if (params.get("oauth"))
+          setMsg("That sign-in did not complete. Please try again.", "err");
+        if (params.get("link") === "password_required")
+          setMsg(
+            "An account already uses that email, and your provider didn't confirm " +
+              "it owns the address. Sign in with your password instead.",
+            "err",
+          );
+      })();
+    </script>
+  </body>
+</html>

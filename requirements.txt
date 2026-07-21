@@ -23,5 +23,10 @@ langsmith
 langgraph
 langchain-anthropic
 
+# Auth: accounts, external sign-in, transactional email
+argon2-cffi          # argon2id password hashing
+authlib              # Google/Microsoft OIDC (discovery, JWKS, PKCE, nonce)
+resend               # verification + password-reset email
+
 # Tests
 pytest

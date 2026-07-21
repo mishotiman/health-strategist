@@ -44,20 +44,6 @@
   form { display:flex; gap:10px; padding:16px 20px; border-top:1px solid var(--line); max-width:780px; width:100%; margin:0 auto; }
   input { flex:1; background:var(--panel); border:1px solid var(--line); color:var(--ink); border-radius:10px; padding:12px 14px; font-size:15px; }
   input:focus { outline:none; border-color:var(--teal); }
-  /* rotating placeholder overlay (native placeholder can't be animated) */
-  .input-wrap { position:relative; flex:1; display:flex; }
-  .input-wrap input { flex:1; width:100%; }
-  .ph-rotator { position:absolute; left:15px; right:15px; top:1px; bottom:1px;
-                overflow:hidden; pointer-events:none; }
-  .input-wrap.has-text .ph-rotator { display:none; }
-  .ph-text { position:absolute; inset:0; display:flex; align-items:center;
-             color:var(--dim); font-size:15px; }
-  .ph-label { max-width:100%; white-space:nowrap; overflow:hidden; text-overflow:ellipsis; }
-  .ph-text.enter { animation:ph-in .55s cubic-bezier(.22,.61,.36,1) both; }
-  .ph-text.leave { animation:ph-out .55s cubic-bezier(.22,.61,.36,1) both; }
-  @keyframes ph-in  { from { transform:translateY(115%);  opacity:0; } to { transform:translateY(0); opacity:1; } }
-  @keyframes ph-out { from { transform:translateY(0); opacity:1; } to { transform:translateY(-115%); opacity:0; } }
-  @media (prefers-reduced-motion: reduce) { .ph-text.enter, .ph-text.leave { animation-duration:.01ms; } }
   button { background:var(--teal); color:#04201c; border:none; border-radius:10px; padding:0 20px; font-weight:600; cursor:pointer; }
   button:disabled { opacity:.5; cursor:default; }
   .attach { background:var(--panel); border:1px solid var(--line); color:var(--dim);
@@ -71,6 +57,10 @@
   .authbtn { font-size:12px; padding:6px 12px; border-radius:8px; background:var(--panel);
              border:1px solid var(--line); color:var(--ink); cursor:pointer; }
   .authbtn:hover { border-color:var(--teal); }
+  /* the WHOOP button plus its data-freshness note, stacked */
+  .whoop-col { display:flex; flex-direction:column; gap:3px; }
+  .sync-note { font-size:10px; color:var(--dim); text-align:center; line-height:1.2; }
+  .sync-note[hidden] { display:none; }
   /* themed scrollbars */
   * { scrollbar-width: thin; scrollbar-color: #33475a transparent; }
   ::-webkit-scrollbar { width:10px; height:10px; }
@@ -141,48 +131,18 @@
   .confirm-box p { margin:0 0 18px; font-size:14px; line-height:1.5; }
   #confirm-ok { background:#ef4444; color:#fff; }
   #confirm-ok:hover { background:#dc2626; }
+  /* brief greeting after signing in / finishing onboarding */
+  #welcome { position:fixed; inset:0; background:var(--bg); z-index:60; display:none;
+             align-items:center; justify-content:center; }
+  #welcome.on { display:flex; animation:welcomeFade 1.9s ease forwards; }
+  #welcome h2 { font-size:30px; font-weight:600; letter-spacing:-.02em; margin:0;
+                animation:welcomeRise .7s cubic-bezier(.22,.61,.36,1) both; }
+  #welcome .accent { color:var(--teal); }
+  @keyframes welcomeFade { 0%{opacity:0} 15%{opacity:1} 70%{opacity:1} 100%{opacity:0} }
+  @keyframes welcomeRise { from { opacity:0; transform:translateY(14px); } to { opacity:1; transform:none; } }
 </style>
 </head>
 <body>
-<div id="onboard" class="overlay" hidden>
-  <div class="modal">
-    <h2>Personalize your strategy</h2>
-    <p>For more personalized responses, please fill in the following fields:</p>
-    <div class="fields">
-      <label>Goals
-        <textarea id="ob-goals" rows="2" placeholder="e.g. build strength, sleep better, run a half-marathon"></textarea>
-      </label>
-      <div class="row">
-        <label>Sex
-          <select id="ob-sex">
-            <option value="">—</option>
-            <option value="male">Male</option>
-            <option value="female">Female</option>
-            <option value="other">Other</option>
-          </select>
-        </label>
-        <label>Birth year
-          <input id="ob-birth" type="number" min="1920" max="2015" placeholder="1992">
-        </label>
-      </div>
-      <div class="row">
-        <label>Height (cm)
-          <input id="ob-height" type="number" min="100" max="250" placeholder="180">
-        </label>
-        <label>Weight (kg)
-          <input id="ob-weight" type="number" min="30" max="300" placeholder="78">
-        </label>
-      </div>
-      <label>Injuries / limitations
-        <input id="ob-injuries" type="text" placeholder="e.g. lower-back tightness">
-      </label>
-    </div>
-    <div class="actions">
-      <button id="ob-skip" class="ghost" type="button">Skip for now</button>
-      <button id="ob-save" type="button">Save</button>
-    </div>
-  </div>
-</div>
 <div id="bw-modal" class="overlay" hidden>
   <div class="modal">
     <div class="modal-head">
@@ -214,8 +174,13 @@
   <h1>Personal Health Strategist</h1>
   <span class="sub"></span>
   <span id="who" class="who"></span>
-  <button id="authbtn" class="authbtn" type="button"></button>
+  <span class="whoop-col">
+    <button id="whoopbtn" class="authbtn" type="button"></button>
+    <span id="whoop-sync" class="sync-note" hidden></span>
+  </span>
+  <button id="acctbtn" class="authbtn" type="button"></button>
 </header>
+<div id="welcome"><h2>Welcome to <span class="accent">PHS</span></h2></div>
 <div id="status"></div>
 
 <div id="chat">
@@ -230,10 +195,7 @@
       <button type="button" class="menu-item" id="menu-add-bw">🩸 Add bloodwork</button>
     </div>
   </div>
-  <div class="input-wrap">
-    <input id="input" autocomplete="off" placeholder="e.g. How's my recovery trending, and how should I train this week?" />
-    <div id="ph-rotator" class="ph-rotator" aria-hidden="true"></div>
-  </div>
+  <input id="input" autocomplete="off" placeholder="Ask about your health, training, recovery, sleep, or bloodwork…" />
   <button id="send" type="submit">Send</button>
 </form>
 
@@ -244,18 +206,30 @@
   const send = document.getElementById('send');
   const statusEl = document.getElementById('status');
   const who = document.getElementById('who');
-  const authbtn = document.getElementById('authbtn');
-  // Persist the thread id so the agent keeps its server-side context across reloads.
-  let threadId = localStorage.getItem('phs_thread');
-  if (!threadId) {
-    threadId = 'web-' + Math.random().toString(36).slice(2, 10);
-    localStorage.setItem('phs_thread', threadId);
-  }
-  // Persisted chat transcript (user text + bot responses), restored on reload.
+  const whoopbtn = document.getElementById('whoopbtn');
+  const whoopSync = document.getElementById('whoop-sync');
+  const acctbtn = document.getElementById('acctbtn');
+
+  // One-shot query flags, read once and then cleared from the URL so a refresh
+  // doesn't replay them. Captured here, at the top, because the greeting has to
+  // fire BEFORE any awaited boot work: it used to run after the WHOOP sync, so a
+  // slow sync made it appear a second late, over an already-visible chat.
+  const bootParams = new URLSearchParams(location.search);
+  if (bootParams.toString()) window.history.replaceState({}, '', '/');
+  if (bootParams.get('welcome') === '1') playWelcome();
+
+  // Guests ("Try Health Strategist now") keep nothing: no transcript, no thread
+  // id, no localStorage at all. `persist` is set once /me says who we are.
+  let persist = false;
+  let threadId = null;
+  let history = [];
+
   function loadHistory() { try { return JSON.parse(localStorage.getItem('phs_chat')) || []; } catch (e) { return []; } }
-  function saveHistory() { try { localStorage.setItem('phs_chat', JSON.stringify(history.slice(-60))); } catch (e) {} }
-  function clearChat() { localStorage.removeItem('phs_chat'); localStorage.removeItem('phs_thread'); }
-  let history = loadHistory();
+  function saveHistory() {
+    if (!persist) return;
+    try { localStorage.setItem('phs_chat', JSON.stringify(history.slice(-60))); } catch (e) {}
+  }
+  function clearChat() { try { localStorage.removeItem('phs_chat'); localStorage.removeItem('phs_thread'); } catch (e) {} }
 
   marked.setOptions({ breaks: true });
   // Disable Markdown strikethrough: the agent writes "~" for "approximately"
@@ -263,76 +237,183 @@
   // strikethrough and cross out the text between them. Tables/links unaffected.
   marked.use({ tokenizer: { del() {} } });
 
-  // ---- who is connected? (demo user by default, or the logged-in account) --
-  let me = { name: 'Demo User', is_demo: true };
-  function renderWho() {
-    const cls = me.is_demo ? 'demo' : 'live';
-    who.innerHTML = 'User: <b class="' + cls + '">' + me.name + '</b>';
-    if (me.is_demo) {
-      authbtn.textContent = 'Connect WHOOP';
-      authbtn.onclick = () => { clearChat(); location.href = '/whoop/connect'; };
-    } else {
-      authbtn.textContent = 'Disconnect WHOOP';
-      authbtn.onclick = async () => {
-        await fetch('/auth/logout', { method: 'POST' });
-        clearChat();
-        location.reload();
-      };
-    }
+  // ---- how fresh is the WHOOP data? ---------------------------------------
+  // Rendered from the stored timestamp rather than a counter, so it stays right
+  // across tab sleeps and needs no network call to age on screen.
+  const RTF = new Intl.RelativeTimeFormat(undefined, { numeric: 'auto' });
+  function relativeTime(iso) {
+    const secs = Math.round((Date.now() - new Date(iso).getTime()) / 1000);
+    if (!Number.isFinite(secs)) return null;
+    if (secs < 60) return 'just now';
+    if (secs < 3600) return RTF.format(-Math.floor(secs / 60), 'minute');
+    if (secs < 86400) return RTF.format(-Math.floor(secs / 3600), 'hour');
+    return RTF.format(-Math.floor(secs / 86400), 'day');
+  }
+  function renderSyncNote() {
+    // Only meaningful for a signed-in account that actually has WHOOP connected.
+    if (me.kind !== 'user' || !me.whoop_connected) { whoopSync.hidden = true; return; }
+    const when = me.whoop_last_synced_at ? relativeTime(me.whoop_last_synced_at) : null;
+    whoopSync.textContent = when ? 'Synced ' + when : 'Not synced yet';
+    whoopSync.hidden = false;
   }
 
-  async function syncStatus() {
-    if (me.is_demo) {
-      statusEl.innerHTML = 'Showing sample data for <b>Demo User</b> — ' +
-        '<a href="/whoop/connect" style="color:var(--teal)">log in with WHOOP</a> to see your own.';
+  // ---- who is this? (a signed-in account, or a guest trying the app) -------
+  let me = { kind: 'guest' };
+  function renderWho() {
+    who.textContent = '';
+    if (me.kind === 'guest') {
+      // Guests get no "User" field — just a way in.
+      whoopbtn.textContent = 'Connect WHOOP';
+      whoopbtn.onclick = () => { location.href = '/login'; };   // needs an account
+      acctbtn.textContent = 'Log in';
+      acctbtn.onclick = () => { location.href = '/login'; };
+      renderSyncNote();
       return;
     }
-    statusEl.textContent = 'Syncing WHOOP…';
+    const name = document.createElement('b');
+    name.className = 'live';
+    name.textContent = me.name || 'Your account';   // textContent: never inject markup
+    who.append(document.createTextNode('User: '), name);
+
+    whoopbtn.textContent = me.whoop_connected ? 'Disconnect WHOOP' : 'Connect WHOOP';
+    whoopbtn.onclick = me.whoop_connected
+      ? async () => {
+          if (!(await askConfirm('Disconnect WHOOP? Your already-synced data stays.',
+                                 'Disconnect'))) return;
+          await fetch('/whoop/disconnect', { method: 'POST' });
+          location.reload();
+        }
+      : () => { location.href = '/whoop/connect'; };
+
+    acctbtn.textContent = 'Log out';
+    acctbtn.onclick = async () => {
+      await fetch('/auth/logout', { method: 'POST' });
+      clearChat();
+      location.href = '/login';
+    };
+    renderSyncNote();
+  }
+
+  // quiet=true is used by the periodic background resync: it skips the loud
+  // "Syncing…/✓ synced" chrome so the status bar doesn't flash every few
+  // minutes, but still surfaces a dropped session (which needs the user to act).
+  async function syncStatus(quiet) {
+    if (me.kind === 'guest') {
+      if (!quiet) statusEl.innerHTML = 'Exploring with sample data — nothing is saved. ' +
+        '<a href="/login" style="color:var(--teal)">Create an account</a> to track your own.';
+      return;
+    }
+    if (!me.whoop_connected) {
+      if (!quiet) statusEl.innerHTML = 'WHOOP isn\'t connected — ' +
+        '<a href="/whoop/connect" style="color:var(--teal)">connect it</a> ' +
+        'to personalize advice with your recovery and sleep.';
+      return;
+    }
+    if (!quiet) statusEl.textContent = 'Syncing WHOOP…';
     try {
       const r = await fetch('/whoop/sync');
       const d = await r.json();
       if (d.metrics_written != null) {
-        statusEl.textContent = '✓ WHOOP synced — ' + d.metrics_written + ' metrics up to date';
-        statusEl.className = 'ok';
-        setTimeout(() => { statusEl.style.opacity = '0'; }, 4000);
+        // a successful pull moves the freshness note, quiet run or not
+        if (d.last_synced_at) { me.whoop_last_synced_at = d.last_synced_at; renderSyncNote(); }
+        if (!quiet) {
+          statusEl.textContent = '✓ WHOOP synced — ' + d.metrics_written + ' metrics up to date';
+          statusEl.className = 'ok';
+          statusEl.style.opacity = '1';
+          setTimeout(() => { statusEl.style.opacity = '0'; }, 4000);
+        }
       } else {
+        statusEl.className = '';
+        statusEl.style.opacity = '1';
         statusEl.innerHTML = 'WHOOP session inactive — ' +
           '<a href="/whoop/connect" style="color:var(--teal)">reconnect to refresh your data</a>.';
       }
-    } catch (e) { statusEl.textContent = ''; }
+    } catch (e) { if (!quiet) statusEl.textContent = ''; }
   }
 
-  // ---- first-visit onboarding prompt --------------------------------------
-  const onboard = document.getElementById('onboard');
-  function closeOnboarding() {
-    localStorage.setItem('phs_onboarded', '1');
-    onboard.hidden = true;
+  // ---- boot ---------------------------------------------------------------
+  function playWelcome() {
+    const w = document.getElementById('welcome');
+    w.classList.add('on');
+    setTimeout(() => w.classList.remove('on'), 1900);
   }
-  document.getElementById('ob-skip').onclick = closeOnboarding;
-  document.getElementById('ob-save').onclick = async () => {
-    const str = (id) => document.getElementById(id).value.trim() || null;
-    const num = (id) => { const v = document.getElementById(id).value; return v ? Number(v) : null; };
-    const body = {
-      goals: str('ob-goals'), sex: str('ob-sex'), birth_year: num('ob-birth'),
-      height_cm: num('ob-height'), weight_kg: num('ob-weight'), injuries: str('ob-injuries'),
-    };
-    try {
-      await fetch('/profile', { method: 'POST', headers: { 'Content-Type': 'application/json' },
-                                body: JSON.stringify(body) });
-      statusEl.textContent = '✓ Saved — responses will use your profile.';
-      statusEl.className = 'ok';
-      statusEl.style.opacity = '1';
-      setTimeout(() => { statusEl.style.opacity = '0'; }, 4000);
-    } catch (e) {}
-    closeOnboarding();
-  };
 
   (async () => {
     try { me = await (await fetch('/me')).json(); } catch (e) {}
+    if (me.kind === 'anon') { location.href = '/login'; return; }
+
+    persist = me.kind === 'user';
+    if (persist) {
+      // Keep the thread id so the agent retains its context across reloads.
+      threadId = localStorage.getItem('phs_thread');
+      if (!threadId) {
+        threadId = 'web-' + Math.random().toString(36).slice(2, 10);
+        localStorage.setItem('phs_thread', threadId);
+      }
+      history = loadHistory();
+    } else {
+      // Guest: a throwaway thread, and nothing touches localStorage.
+      threadId = 'guest-' + Math.random().toString(36).slice(2, 10);
+      clearChat();
+      document.querySelector('.attach-wrap').hidden = true;   // no uploads without an account
+    }
+
     renderWho();
+    restoreChat();
     await syncStatus();
-    if (!localStorage.getItem('phs_onboarded')) onboard.hidden = false;
+    if (bootParams.get('whoop') === 'mismatch') await resolveWhoopMismatch();
   })();
+
+  // The user authorized a WHOOP account that isn't the one already connected.
+  // Nothing has been changed server-side yet — replacing is destructive, so it
+  // only happens on an explicit confirmation that states the cost.
+  async function resolveWhoopMismatch() {
+    let info = {};
+    try { info = await (await fetch('/whoop/pending')).json(); } catch (e) {}
+    if (!info.pending) return;
+
+    const n = info.metrics_at_risk || 0, w = info.workouts_at_risk || 0;
+    const ok = await askConfirm(
+      'That WHOOP account is different from the one currently connected. ' +
+      'Replacing it deletes the ' + n + ' metric' + (n === 1 ? '' : 's') + ' and ' +
+      w + ' workout' + (w === 1 ? '' : 's') + ' already synced from the previous ' +
+      'account, then pulls this account’s history instead. Bloodwork and your ' +
+      'profile are unaffected.',
+      'Replace');
+
+    statusEl.style.opacity = '1';
+    if (!ok) {
+      await fetch('/whoop/pending/cancel', { method: 'POST' });
+      statusEl.textContent = 'Kept your existing WHOOP connection.';
+      statusEl.className = '';
+      return;
+    }
+    statusEl.textContent = 'Replacing WHOOP data…';
+    statusEl.className = '';
+    try {
+      const r = await (await fetch('/whoop/pending/replace', { method: 'POST' })).json();
+      statusEl.textContent = '✓ Switched WHOOP account — ' +
+        (r.metrics_written || 0) + ' metrics synced from the new one.';
+      statusEl.className = 'ok';
+      me = await (await fetch('/me')).json();
+      renderWho();
+    } catch (e) {
+      statusEl.textContent = 'Could not switch accounts — please try again.';
+    }
+    setTimeout(() => { statusEl.style.opacity = '0'; }, 5000);
+  }
+
+  // Keep WHOOP data fresh: re-pull every 5 minutes while signed in and connected.
+  // WHOOP's recovery/sleep/HRV update ~once a day, so this is generous; bump the
+  // interval up if you want fewer calls. Skipped while the tab is hidden.
+  const WHOOP_RESYNC_MS = 5 * 60 * 1000;
+  setInterval(() => {
+    if (me.kind === 'user' && me.whoop_connected && !document.hidden) syncStatus(true);
+  }, WHOOP_RESYNC_MS);
+
+  // Re-render the freshness note far more often than we re-sync, so "2 minutes
+  // ago" keeps counting up between pulls. Pure local formatting — no requests.
+  setInterval(renderSyncNote, 30 * 1000);
 
   // ---- render helpers -----------------------------------------------------
   function addUser(text) {
@@ -375,8 +456,8 @@
     }
   }
 
-  // ---- restore persisted transcript on load -------------------------------
-  (function restoreChat() {
+  // ---- restore persisted transcript (signed-in users only; guests have none)
+  function restoreChat() {
     if (!history.length) return;
     const hint = chat.querySelector('.hint');
     if (hint) hint.remove();
@@ -385,7 +466,7 @@
       else renderBot(addBot(), m.data);
     });
     chat.scrollTop = chat.scrollHeight;
-  })();
+  }
 
   // ---- bloodwork: attach menu + upload manager ----------------------------
   const attachBtn = document.getElementById('attach');
@@ -514,56 +595,12 @@
     }
   };
 
-  // ---- rotating placeholder questions -------------------------------------
-  // The native <input placeholder> can't be animated, so we overlay our own
-  // rotator: each question slides up and out the top while the next rises in
-  // from the bottom. It hides itself as soon as the user types.
-  const inputWrap = document.querySelector('.input-wrap');
-  const phRotator = document.getElementById('ph-rotator');
-  const PLACEHOLDER_QS = [
-    "How's my recovery trending, and how should I train this week?",
-    'Is my resting heart rate where it should be?',
-    'How much protein should I eat to build strength?',
-    'My sleep has been short lately — how does that affect performance?',
-    'Should I take creatine, and how much?',
-    'Is my vitamin D too low? What does the research say?',
-    'Does caffeine before training actually help?',
-    'How do I use cold-water immersion without blunting muscle growth?',
-    'What can I do this week to improve my HRV?',
-    'Is magnesium worth taking for better sleep?',
-  ];
-  let phIndex = Math.floor(Math.random() * PLACEHOLDER_QS.length);
-  let phCurrent = null;                        // the on-screen question (tracked, not queried)
-  function phMake(q) {
-    const el = document.createElement('span'); el.className = 'ph-text';
-    const lbl = document.createElement('span'); lbl.className = 'ph-label'; lbl.textContent = 'e.g. ' + q;
-    el.appendChild(lbl); return el;
-  }
-  function phRotate() {
-    if (input.value) return;                 // paused while the user is typing
-    phIndex = (phIndex + 1) % PLACEHOLDER_QS.length;
-    const next = phMake(PLACEHOLDER_QS[phIndex]);
-    next.classList.add('enter');
-    phRotator.appendChild(next);
-    const old = phCurrent;                    // supersede exactly one element -> no orphans
-    phCurrent = next;
-    if (old) { old.classList.add('leave'); setTimeout(() => old.remove(), 600); }
-  }
-  input.placeholder = '';                     // hand off to the animated overlay
-  phCurrent = phMake(PLACEHOLDER_QS[phIndex]);
-  phRotator.appendChild(phCurrent);           // first one, no animation
-  setInterval(phRotate, 6000);
-  input.addEventListener('input', () => {
-    inputWrap.classList.toggle('has-text', !!input.value);
-  });
-
   // ---- chat ---------------------------------------------------------------
   form.addEventListener('submit', async (e) => {
     e.preventDefault();
     const q = input.value.trim();
     if (!q) return;
     input.value = '';
-    inputWrap.classList.remove('has-text');   // box empty again -> rotator resumes
     send.disabled = true;
     const hint = chat.querySelector('.hint');
     if (hint) hint.remove();

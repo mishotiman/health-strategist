@@ -39,10 +39,10 @@ flowchart TD
 
 ## What it does
 
-- **Agentic RAG.** A LangGraph ReAct agent orchestrates three tools — `knowledge_search`
+- **Agentic RAG.** A LangGraph ReAct agent orchestrates four tools — `knowledge_search`
   (RAG over the research corpus), `health_data` (your normalized WHOOP + bloodwork
-  metrics), and `memory` (your profile/goals). It decides which to call per question and
-  loops until it can answer. A **guardrail policy** (never diagnose, defer red flags) wraps
+  metrics), `workouts` (your logged WHOOP training sessions), and `memory` (your
+  profile/goals). It decides which to call per question and loops until it can answer. A **guardrail policy** (never diagnose, defer red flags) wraps
   every response.
 - **"Any source, one schema" ingestion.** WHOOP (live OAuth2) and bloodwork PDFs both
   normalize into a single `health_metrics` shape (`source · date · metric_type · value ·
@@ -112,9 +112,11 @@ the image pulled from Azure Container Registry via managed identity, and secrets
 Container Apps secret store. Full runbook — deploy loop, DB seeding, cost controls,
 gotchas — in [DEPLOY.md](DEPLOY.md).
 
-> **Note:** the app currently has **no authentication** (the UI hardcodes `user_id=1` and the
-> API trusts any `user_id`), so ingress is IP-restricted rather than open to the world. Real
-> auth — or a synthetic demo user with real data behind a login — is the next task.
+**Accounts.** Email + password (argon2id) or Google / Microsoft sign-in, with email
+verification required before the app unlocks and a self-serve password reset. Sessions are
+server-side and revocable. Anyone can also pick **"Try Health Strategist now"** for a guest
+session that reads a sample dataset and saves nothing. Every write endpoint derives the user
+from the session, and WHOOP is connected per-account.
 
 ## Quickstart
 
@@ -142,14 +144,17 @@ WHOOP app, then visit `http://localhost:8000/whoop/connect?user_id=1`.
 
 | Method | Path | Purpose |
 |---|---|---|
-| GET | `/` | Chat UI |
-| POST | `/chat` | Talk to the agent (`{user_id, message, thread_id?}`) |
+| GET | `/` · `/login` · `/onboarding` | Chat UI, sign-in page, first-run setup |
+| POST | `/chat` | Talk to the agent (`{message, thread_id?}`) |
 | POST | `/ask` | Fixed RAG pipeline: retrieve → cited answer |
 | POST | `/search` | Retrieval only (no LLM) |
-| POST | `/users` | Onboard: create a user + profile |
+| POST | `/auth/register` · `/auth/login` · `/auth/logout` | Accounts |
+| GET | `/auth/oauth/{google\|microsoft}/start` · `/callback` | External sign-in |
+| GET | `/auth/verify` · POST `/auth/forgot-password` · `/auth/reset-password` | Email flows |
+| POST | `/auth/guest` | Start a read-only guest session |
 | POST | `/metrics` · GET `/metrics/{id}` | Ingest / query normalized metrics |
 | POST | `/upload/bloodwork` | Upload a lab PDF → extracted metrics |
-| GET | `/whoop/connect` · `/whoop/callback` | WHOOP OAuth2 |
+| GET | `/whoop/connect` · `/whoop/callback` | WHOOP OAuth2 (per account) |
 
 ## Evals
 

@@ -78,9 +78,23 @@ docker compose exec -T db psql "$url" -c "\dt"
 Schema (already applied; re-runnable — everything is `IF NOT EXISTS`):
 
 ```powershell
-Get-Content scripts\init_db.sql -Raw        | docker compose exec -T db psql "$url"
+Get-Content scripts\init_db.sql -Raw          | docker compose exec -T db psql "$url"
 Get-Content scripts\migrate_features.sql -Raw | docker compose exec -T db psql "$url"
+Get-Content scripts\migrate_workouts.sql -Raw | docker compose exec -T db psql "$url"
+Get-Content scripts\migrate_auth.sql -Raw     | docker compose exec -T db psql "$url"
+Get-Content scripts\migrate_providers.sql -Raw | docker compose exec -T db psql "$url"
+Get-Content scripts\migrate_sync_time.sql -Raw | docker compose exec -T db psql "$url"
 ```
+
+> Run these **in order**. `migrate_providers.sql` folds the old `whoop_connections`
+> table into `provider_connections` (one row per user *and provider*, so Garmin/Oura
+> slot in without new tables), copying any existing connection across and then
+> dropping the old table. It's guarded, so re-running is a no-op.
+
+> **Workouts need a WHOOP re-consent.** Reading logged workouts uses the new
+> `read:workout` scope, so after deploying, the owner must **Disconnect WHOOP →
+> Connect WHOOP** once to re-authorize with the added scope; existing tokens
+> won't have it. Then run `migrate_workouts.sql` (above) so the table exists.
 
 **pgvector** needs allowlisting on Azure before `CREATE EXTENSION` works:
 
@@ -143,40 +157,61 @@ az group delete --name phs-rg --yes --no-wait
 
 ACR Basic (~$5/mo) has no stop — only delete.
 
-## Auth / demo user
+## Accounts & auth
 
-The public URL defaults to a synthetic **Demo User**; real data is behind a
-login. Completing WHOOP OAuth sets a signed session cookie (`app/session.py`)
-identifying the browser as the owner account; without it, callers are the demo
-user. `/chat`, `/whoop/sync`, and `/metrics/{id}` derive the user from the
-session, so real data (`/metrics/1`) returns 403 without the cookie.
+Real multi-user accounts: email + password (argon2id), plus Google and Microsoft
+sign-in. Email addresses must be **verified before the app is usable**. Visitors
+with no account can choose "Try Health Strategist now" — a guest session that
+reads the sample account and writes nothing.
+
+Sessions are server-side and revocable (`app/session.py`): the cookie holds a
+random token, the database stores only its hash, and logout / password change
+invalidates it. There is no longer a `SESSION_SECRET` or `OWNER_USER_ID` — the
+old signed-cookie scheme and the single-owner assumption are both gone.
 
 **Rolling this out to a fresh/existing cloud DB:**
 ```powershell
-# 1. migration adds users.display_name + users.is_demo
-Get-Content scripts\migrate_features.sql -Raw | docker compose exec -T db psql "$url"
-# 2. seed the demo user (run against the cloud DB: point the api container's
-#    DATABASE_URL at $url, or run the SQL/seed with that connection)
+# 1. schema for accounts, identities, sessions, email tokens, throttling
+Get-Content scripts\migrate_auth.sql -Raw | docker compose exec -T db psql "$url"
+# 2. seed the sample account that guest mode reads
 docker compose exec -T api python scripts/seed_demo_user.py
-# 3. set a real session secret (REQUIRED in prod — dev default is insecure)
-az containerapp secret set -g phs-rg -n phs-api --secrets "session-secret=<long-random>"
-az containerapp update -g phs-rg -n phs-api `
-  --set-env-vars "SESSION_SECRET=secretref:session-secret" "OWNER_USER_ID=1"
+# 3. secrets for sign-in + email
+az containerapp secret set -g phs-rg -n phs-api --secrets `
+  "google-client-secret=<...>" "microsoft-client-secret=<...>" "resend-key=<...>"
+az containerapp update -g phs-rg -n phs-api --set-env-vars `
+  "APP_BASE_URL=https://phs-api.orangehill-97462476.polandcentral.azurecontainerapps.io" `
+  "GOOGLE_CLIENT_ID=<...>" "GOOGLE_CLIENT_SECRET=secretref:google-client-secret" `
+  "MICROSOFT_CLIENT_ID=<...>" "MICROSOFT_CLIENT_SECRET=secretref:microsoft-client-secret" `
+  "MICROSOFT_TENANT=common" "RESEND_API_KEY=secretref:resend-key" `
+  "EMAIL_FROM=Personal Health Strategist <noreply@yourdomain>"
 ```
-After this, `SESSION_SECRET` joins the secret list below. Confirm the WHOOP
-callback URL is registered (it already is) so login redirects work.
+
+**Redirect URIs** must be registered with each provider, for *both* localhost and
+the live URL — Google Cloud Console and Azure AD ("Entra ID") respectively:
+
+```
+<APP_BASE_URL>/auth/oauth/google/callback
+<APP_BASE_URL>/auth/oauth/microsoft/callback
+```
+
+> **Email deliverability matters here.** Because verification *blocks* access, a
+> verification mail that lands in spam locks a user out. Verify your own sending
+> domain in Resend rather than shipping with the shared test sender. With no
+> `RESEND_API_KEY` set the link is written to the container logs instead, which
+> is how the flow is walked locally.
 
 ## Security notes
 
-- **Auth is demo-user + WHOOP-login** (above). Ingress no longer *needs* to be
-  IP-restricted to protect data, but you can still lock it to your IP for a
-  fully private instance:
+- Every write endpoint derives the user from the session (`require_user`);
+  read-only endpoints accept a guest (`readable_user`). `POST /metrics` no longer
+  accepts a `user_id` in the body, `POST /users` is gone (replaced by
+  `/auth/register`), and `/whoop/connect` no longer takes a `?user_id=`.
+- WHOOP is **per-user**: each account connects its own, and guests cannot connect.
+- Ingress may still be IP-restricted for a fully private instance:
   ```powershell
   az containerapp ingress access-restriction set -g phs-rg -n phs-api `
     --rule-name allow-my-ip --ip-address <your-ip>/32 --action Allow
   ```
-- Write endpoints (`POST /metrics`, `/upload/bloodwork`, `POST /users`) still
-  take a `user_id` and are not yet session-gated — a follow-up if needed.
 - ACR admin user is disabled; the Container App pulls via its system-assigned
   managed identity.
 - `MemorySaver` keeps agent conversation state in RAM, so keep `--max-replicas 1`

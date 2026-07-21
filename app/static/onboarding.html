@@ -1,0 +1,181 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Set up · Personal Health Strategist</title>
+<style>
+  :root { --bg:#0f1720; --panel:#16212e; --line:#26333f; --teal:#2dd4bf; --ink:#e6edf3; --dim:#8aa0b2; }
+  * { box-sizing:border-box; }
+  body { margin:0; min-height:100vh; background:var(--bg); color:var(--ink);
+         font-family:system-ui,-apple-system,Segoe UI,Roboto,sans-serif;
+         display:flex; flex-direction:column; }
+  /* progress */
+  .bar { height:3px; background:var(--line); position:sticky; top:0; }
+  .bar > i { display:block; height:100%; width:0; background:var(--teal);
+             transition:width .35s cubic-bezier(.22,.61,.36,1); }
+  header { display:flex; align-items:center; gap:9px; padding:16px 22px;
+           font-size:14px; font-weight:600; }
+  header .dot { width:9px; height:9px; border-radius:50%; background:var(--teal); }
+  header .count { margin-left:auto; color:var(--dim); font-size:12px; font-weight:400; }
+  main { flex:1; display:flex; align-items:center; justify-content:center; padding:24px; }
+  .card { width:100%; max-width:440px; }
+  .step { animation:rise .4s cubic-bezier(.22,.61,.36,1) both; }
+  .step[hidden] { display:none; }
+  @keyframes rise { from { opacity:0; transform:translateY(14px); } to { opacity:1; transform:none; } }
+  h1 { font-size:23px; margin:0 0 8px; font-weight:600; letter-spacing:-.01em; line-height:1.3; }
+  .hint { color:var(--dim); font-size:13px; margin:0 0 22px; line-height:1.5; }
+  input, textarea, select { width:100%; background:var(--panel); border:1px solid var(--line);
+      color:var(--ink); border-radius:10px; padding:12px 14px; font-size:15px; font-family:inherit; }
+  input:focus, textarea:focus, select:focus { outline:none; border-color:var(--teal); }
+  textarea { resize:vertical; min-height:88px; }
+  .choices { display:flex; flex-wrap:wrap; gap:9px; }
+  .choice { flex:1 1 auto; background:var(--panel); border:1px solid var(--line); color:var(--ink);
+            border-radius:10px; padding:12px 16px; font-size:14px; cursor:pointer; font-family:inherit; }
+  .choice:hover { border-color:var(--teal); }
+  .choice.sel { border-color:var(--teal); background:rgba(45,212,191,.12); color:var(--teal); font-weight:600; }
+  .suffix { position:relative; }
+  .suffix span { position:absolute; right:14px; top:50%; transform:translateY(-50%);
+                 color:var(--dim); font-size:13px; pointer-events:none; }
+  .nav { display:flex; align-items:center; gap:12px; margin-top:24px; }
+  button.primary { background:var(--teal); color:#04201c; border:none; border-radius:10px;
+      padding:12px 26px; font-weight:600; font-size:14px; cursor:pointer; font-family:inherit; }
+  button.primary:hover { filter:brightness(1.06); }
+  .link { background:none; border:none; color:var(--dim); cursor:pointer; font-size:13px;
+          font-family:inherit; padding:6px; }
+  .link:hover { color:var(--ink); }
+  .spacer { flex:1; }
+  /* welcome */
+  #welcome { position:fixed; inset:0; background:var(--bg); display:flex; align-items:center;
+             justify-content:center; z-index:30; opacity:0; pointer-events:none; }
+  #welcome.on { opacity:1; animation:welcome 2.1s ease forwards; }
+  #welcome h2 { font-size:30px; font-weight:600; letter-spacing:-.02em;
+                animation:rise .7s cubic-bezier(.22,.61,.36,1) both; }
+  #welcome .accent { color:var(--teal); }
+  @keyframes welcome { 0%{opacity:0} 18%{opacity:1} 72%{opacity:1} 100%{opacity:0} }
+</style>
+</head>
+<body>
+<div class="bar"><i id="bar"></i></div>
+<header><span class="dot"></span> Personal Health Strategist
+  <span class="count" id="count"></span></header>
+
+<main>
+  <div class="card">
+    <div class="step" data-key="goals">
+      <h1>What do you want to achieve?</h1>
+      <p class="hint">Your goals shape every recommendation. Plain language is perfect.</p>
+      <textarea id="goals" placeholder="e.g. build strength, sleep better, run a half-marathon"></textarea>
+    </div>
+
+    <div class="step" data-key="sex" hidden>
+      <h1>What's your sex?</h1>
+      <p class="hint">Some research findings differ by sex &mdash; this keeps advice accurate.</p>
+      <div class="choices" id="sex-choices">
+        <button type="button" class="choice" data-val="male">Male</button>
+        <button type="button" class="choice" data-val="female">Female</button>
+        <button type="button" class="choice" data-val="other">Other</button>
+      </div>
+    </div>
+
+    <div class="step" data-key="birth_year" hidden>
+      <h1>Which year were you born?</h1>
+      <p class="hint">Used for age-appropriate training and lab reference ranges.</p>
+      <input id="birth_year" type="number" min="1920" max="2015" placeholder="1992" inputmode="numeric">
+    </div>
+
+    <div class="step" data-key="height_cm" hidden>
+      <h1>How tall are you?</h1>
+      <p class="hint">Used alongside weight for dosing guidance like protein intake.</p>
+      <div class="suffix"><input id="height_cm" type="number" min="100" max="250"
+           placeholder="180" inputmode="numeric"><span>cm</span></div>
+    </div>
+
+    <div class="step" data-key="weight_kg" hidden>
+      <h1>And your weight?</h1>
+      <p class="hint">Several recommendations scale per kilogram of body weight.</p>
+      <div class="suffix"><input id="weight_kg" type="number" min="30" max="300"
+           placeholder="78" inputmode="numeric"><span>kg</span></div>
+    </div>
+
+    <div class="step" data-key="injuries" hidden>
+      <h1>Anything to work around?</h1>
+      <p class="hint">Injuries or limitations we should keep in mind. Leave blank if none.</p>
+      <input id="injuries" type="text" placeholder="e.g. lower-back tightness">
+    </div>
+
+    <div class="nav">
+      <button class="link" id="back" hidden>&larr; Back</button>
+      <div class="spacer"></div>
+      <button class="link" id="skip">Skip</button>
+      <button class="primary" id="next">Next</button>
+    </div>
+  </div>
+</main>
+
+<div id="welcome"><h2>Welcome to <span class="accent">PHS</span></h2></div>
+
+<script>
+  const steps = [...document.querySelectorAll('.step')];
+  const bar = document.getElementById('bar');
+  const count = document.getElementById('count');
+  const back = document.getElementById('back');
+  const next = document.getElementById('next');
+  let i = 0;
+
+  function render() {
+    steps.forEach((s, n) => { s.hidden = n !== i; });
+    bar.style.width = ((i) / steps.length * 100) + '%';
+    count.textContent = (i + 1) + ' of ' + steps.length;
+    back.hidden = i === 0;
+    next.textContent = i === steps.length - 1 ? 'Finish' : 'Next';
+    const field = steps[i].querySelector('input, textarea');
+    if (field) field.focus();
+  }
+
+  // single-select chips
+  document.querySelectorAll('#sex-choices .choice').forEach(b => {
+    b.onclick = () => {
+      document.querySelectorAll('#sex-choices .choice').forEach(x => x.classList.remove('sel'));
+      b.classList.add('sel');
+    };
+  });
+
+  function collect() {
+    const str = (id) => (document.getElementById(id).value || '').trim() || null;
+    const num = (id) => { const v = document.getElementById(id).value; return v ? Number(v) : null; };
+    const sel = document.querySelector('#sex-choices .choice.sel');
+    return {
+      goals: str('goals'), sex: sel ? sel.dataset.val : null, birth_year: num('birth_year'),
+      height_cm: num('height_cm'), weight_kg: num('weight_kg'), injuries: str('injuries'),
+    };
+  }
+
+  async function finish() {
+    next.disabled = true;
+    try {
+      await fetch('/profile', { method: 'POST', headers: { 'Content-Type': 'application/json' },
+                                body: JSON.stringify(collect()) });
+      await fetch('/auth/onboarding/complete', { method: 'POST' });
+    } catch (e) {}
+    bar.style.width = '100%';
+    // brief welcome, then straight into the chat
+    const w = document.getElementById('welcome');
+    w.classList.add('on');
+    setTimeout(() => { location.href = '/'; }, 1900);
+  }
+
+  function advance() { if (i === steps.length - 1) finish(); else { i++; render(); } }
+  next.onclick = advance;
+  document.getElementById('skip').onclick = advance;
+  back.onclick = () => { if (i > 0) { i--; render(); } };
+  document.addEventListener('keydown', (e) => {
+    if (e.key === 'Enter' && !e.shiftKey && document.activeElement.tagName !== 'TEXTAREA') {
+      e.preventDefault(); advance();
+    }
+  });
+
+  render();
+</script>
+</body>
+</html>

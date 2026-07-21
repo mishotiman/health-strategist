@@ -4,6 +4,7 @@ personalized health strategies.
 Tools:
   knowledge_search — RAG over the sports-science corpus (evidence + citations)
   health_data      — the user's normalized WHOOP + bloodwork metrics
+  workouts         — the user's logged WHOOP training sessions
   memory           — the user's profile (goals, physical data, injuries)
 
 The guardrail is an always-on policy in the system prompt (never diagnose,
@@ -13,6 +14,7 @@ so the agent remembers earlier turns. Runs auto-trace to LangSmith.
 
 from __future__ import annotations
 
+import datetime as dt
 import json
 import os
 
@@ -23,7 +25,7 @@ if os.environ.get("LANGSMITH_API_KEY"):
     os.environ.setdefault("LANGSMITH_TRACING", "true")
 
 from langchain_anthropic import ChatAnthropic
-from langchain_core.messages import HumanMessage
+from langchain_core.messages import HumanMessage, SystemMessage
 from langchain_core.runnables import RunnableConfig
 from langchain_core.tools import tool
 from langgraph.checkpoint.memory import MemorySaver
@@ -34,6 +36,7 @@ from app.db import get_connection
 from app.ingestion import query_metrics
 from app.prompts import GUARDRAILS
 from app.rag import retrieve
+from app.workouts import query_workouts
 
 # Opus is the flagship agent. Override with AGENT_MODEL (e.g. claude-haiku-4-5)
 # for cheap smoke runs of the agent eval.
@@ -49,6 +52,10 @@ How to work:
 sleep, recovery, or stress. Cite the sources it returns, e.g. [1], [2].
 - Use `health_data` to personalize with the user's WHOOP metrics (recovery, HRV, \
 resting HR, sleep) and bloodwork (vitamin D, ferritin, etc.).
+- Use `workouts` for the user's logged training sessions (WHOOP workouts): sport, \
+duration, strain, heart rate, calories, distance. Use it whenever the question is \
+about what or how they've trained; `health_data` is daily recovery/sleep, not \
+individual sessions.
 - Use `memory` to read the user's goals, physical data, and injuries.
 - Ground every recommendation in retrieved evidence or the user's own data. If \
 the corpus doesn't cover something, say so instead of guessing.
@@ -64,6 +71,22 @@ in the research corpus, for the user to try right away.
 
 {GUARDRAILS}
 Be concise, practical, and honest about uncertainty."""
+
+
+def _prompt_with_today(state) -> list:
+    """The system prompt with today's date stamped on, recomputed every call so
+    the agent never has to guess 'today' / 'yesterday' / 'this week'. Returned
+    fresh each turn (not persisted into thread state). Uses the server's local
+    date; swap in the user's timezone if near-midnight precision ever matters."""
+    today = dt.date.today()
+    dated = (
+        f"{SYSTEM_PROMPT}\n\n"
+        f"Today's date is {today.isoformat()} ({today.strftime('%A')}). Use it "
+        "for any date reasoning; never guess the date. The user's most recent "
+        "WHOOP data can lag today by a day or two, so do not assume the latest "
+        "logged entry is from today."
+    )
+    return [SystemMessage(content=dated)] + state["messages"]
 
 
 def _fmt_hours(value: float) -> str:
@@ -112,6 +135,19 @@ def health_data(metric_type: str = "", config: RunnableConfig = None) -> str:
 
 
 @tool
+def workouts(config: RunnableConfig = None) -> str:
+    """Look up the user's recent logged WHOOP workouts (training sessions). Each
+    row has: sport (e.g. running, weightlifting), workout_date, start/end time,
+    duration_min, strain (WHOOP 0–21), avg_hr, max_hr, calories (kcal), and
+    distance_m (cardio only). Use for any question about the user's actual
+    training — what they did, how hard, how long, how far, and trends across
+    sessions. This is the training log; health_data holds daily recovery/sleep."""
+    user_id = config["configurable"]["user_id"]
+    rows = query_workouts(user_id, limit=25)
+    return json.dumps(rows, default=str) if rows else "No workouts on record."
+
+
+@tool
 def memory(config: RunnableConfig = None) -> str:
     """Read the user's profile: goals, sex, birth year, height, weight, and
     injuries. Use to tailor advice to who they are and what they want."""
@@ -133,8 +169,8 @@ _llm = ChatAnthropic(model=MODEL, max_tokens=2000)
 _checkpointer = MemorySaver() # persist conversation state per thread in RAM, so the agent remembers earlier turns
 _agent = create_react_agent(
     _llm,
-    tools=[knowledge_search, health_data, memory],
-    prompt=SYSTEM_PROMPT,
+    tools=[knowledge_search, health_data, workouts, memory],
+    prompt=_prompt_with_today,
     checkpointer=_checkpointer,
 )
 

@@ -1,6 +1,9 @@
 """WHOOP JSON -> canonical metric mapping. Pure parsers, no network."""
 
-from app.whoop import parse_recovery, parse_sleep
+import datetime as dt
+
+from app.whoop import parse_recovery, parse_sleep, parse_workout
+from app.workouts import offset_to_tz
 
 
 def test_parse_recovery_maps_all_score_fields():
@@ -88,6 +91,84 @@ def test_parse_sleep_sums_multiple_naps_per_day():
     assert "sleep_hours" not in rows             # a nap-only day has no overnight
 
 
+def test_parse_workout_maps_fields_and_converts_energy():
+    records = [{
+        "id": "abc-123",
+        "start": "2026-07-18T17:00:00.000Z",
+        "end": "2026-07-18T18:00:00.000Z",
+        "sport_name": "running",
+        "score": {
+            "strain": 12.34,
+            "average_heart_rate": 148.6,
+            "max_heart_rate": 181.2,
+            "kilojoule": 2000.0,      # -> ~478 kcal
+            "distance_meter": 5000.0,
+        },
+    }]
+    row = parse_workout(records)[0]
+
+    assert row["external_id"] == "abc-123"
+    assert row["sport"] == "running"
+    assert row["workout_date"] == "2026-07-18"
+    assert row["duration_min"] == 60.0        # one hour
+    assert row["strain"] == 12.3              # 1 dp
+    assert row["avg_hr"] == 149               # rounded to a whole bpm
+    assert row["max_hr"] == 181
+    assert row["calories"] == 478             # 2000 kJ * 0.239006
+    assert row["distance_m"] == 5000.0
+
+
+def test_parse_workout_sport_id_fallback_and_missing_optionals():
+    # Older payloads carry a numeric sport_id; a lift has no distance/energy.
+    records = [{
+        "id": 55, "start": "2026-07-19T07:30:00Z", "end": "2026-07-19T08:15:00Z",
+        "sport_id": 45,
+        "score": {"strain": 9.0, "average_heart_rate": 130, "max_heart_rate": 160},
+    }]
+    row = parse_workout(records)[0]
+
+    assert row["external_id"] == "55"         # id stringified for storage
+    assert row["sport"] == "45"               # numeric id used when no name
+    assert row["duration_min"] == 45.0
+    assert row["calories"] is None            # no kilojoule -> no calories
+    assert row["distance_m"] is None          # no distance -> None (dropped on read)
+
+
+def test_parse_workout_skips_records_without_id_or_start():
+    assert parse_workout([{"start": "2026-07-19T07:00:00Z"}]) == []   # no id
+    assert parse_workout([{"id": "x"}]) == []                          # no start
+
+
+def test_parse_workout_keeps_utc_instant_and_local_date():
+    # A run at 02:30 local (UTC+3) is 23:30 UTC the day before. The stored
+    # timestamp stays the true UTC instant; the calendar date is the local one
+    # (the day the user actually trained), and the offset is carried through.
+    records = [{
+        "id": "tz-1",
+        "start": "2026-07-19T23:30:00.000Z",
+        "end": "2026-07-19T23:55:00.000Z",
+        "sport_name": "running",
+        "timezone_offset": "+03:00",
+        "score": {"strain": 5.0},
+    }]
+    row = parse_workout(records)[0]
+
+    assert row["start_time"] == "2026-07-19T23:30:00.000Z"   # UTC instant untouched
+    assert row["tz_offset"] == "+03:00"
+    assert row["workout_date"] == "2026-07-20"               # local calendar date
+    assert row["duration_min"] == 25.0                       # offset-independent
+
+
+def test_offset_to_tz_parses_whoop_shapes():
+    assert offset_to_tz("+03:00") == dt.timezone(dt.timedelta(hours=3))
+    assert offset_to_tz("-05:00") == dt.timezone(dt.timedelta(hours=-5))
+    assert offset_to_tz("+0000") == dt.timezone.utc
+    assert offset_to_tz("Z") == dt.timezone.utc
+    assert offset_to_tz(None) is None
+    assert offset_to_tz("") is None
+
+
 def test_parsers_handle_empty_input():
     assert parse_recovery([]) == []
     assert parse_sleep([]) == []
+    assert parse_workout([]) == []

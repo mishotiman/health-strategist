@@ -1,24 +1,46 @@
-"""Signed session cookie — a browser must not be able to forge another user's id."""
+"""Server-side sessions: a login must be revocable, expiring, and never stored
+in a form that a database leak could replay."""
 
 from app import session as sess
+from app.db import get_connection
 
 
-def test_roundtrip_valid_token():
-    token = sess.make_token(7)
-    assert sess.read_token(token) == 7
+def test_create_then_read_returns_the_user(temp_user):
+    token = sess.create(temp_user)
+    assert sess.read(token) == temp_user
 
 
-def test_rejects_missing_or_malformed():
-    assert sess.read_token(None) is None
-    assert sess.read_token("") is None
-    assert sess.read_token("7") is None            # no signature
-    assert sess.read_token("notanid.sig") is None  # non-numeric id
+def test_missing_or_unknown_tokens_are_rejected(temp_user):
+    assert sess.read(None) is None
+    assert sess.read("") is None
+    assert sess.read("not-a-real-token") is None
 
 
-def test_rejects_tampered_signature():
-    token = sess.make_token(7)
-    forged = "9." + token.split(".", 1)[1]   # keep user 7's signature, claim to be user 9
-    assert sess.read_token(forged) is None
+def test_revoke_ends_that_session(temp_user):
+    token = sess.create(temp_user)
+    sess.revoke(token)
+    assert sess.read(token) is None            # the old cookie is dead server-side
 
-    bad_sig = "7." + ("0" * 64)              # right shape, wrong signature
-    assert sess.read_token(bad_sig) is None
+
+def test_revoke_all_ends_every_session(temp_user):
+    first, second = sess.create(temp_user), sess.create(temp_user)
+    assert sess.revoke_all(temp_user) >= 2
+    assert sess.read(first) is None
+    assert sess.read(second) is None
+
+
+def test_expired_session_is_rejected(temp_user):
+    token = sess.create(temp_user)
+    with get_connection() as conn, conn.cursor() as cur:
+        cur.execute("UPDATE sessions SET expires_at = now() - INTERVAL '1 day' "
+                    "WHERE user_id = %s", (temp_user,))
+        conn.commit()
+    assert sess.read(token) is None
+
+
+def test_only_a_hash_of_the_token_is_stored(temp_user):
+    token = sess.create(temp_user)
+    with get_connection() as conn, conn.cursor() as cur:
+        cur.execute("SELECT token_hash FROM sessions WHERE user_id = %s", (temp_user,))
+        stored = cur.fetchone()[0]
+    assert stored != token           # a leaked database yields no usable cookies

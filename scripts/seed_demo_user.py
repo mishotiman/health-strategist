@@ -15,6 +15,7 @@ sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))  # make `app` 
 
 from app.db import get_connection
 from app.ingestion import upsert_metrics
+from app.workouts import upsert_workouts
 
 DEMO_EMAIL = "demo@phs.local"
 DEMO_NAME = "Demo User"
@@ -69,10 +70,52 @@ def _synthetic_metrics() -> list[dict]:
     return rows
 
 
+# (sport, distance_m range or None for non-cardio, avg_hr range)
+_DEMO_SPORTS = [
+    ("weightlifting", None, (110, 140)),
+    ("running", (4000, 10000), (140, 165)),
+    ("cycling", (12000, 32000), (125, 150)),
+    ("functional_fitness", None, (130, 160)),
+    ("hiit", None, (145, 170)),
+]
+
+
+def _synthetic_workouts() -> list[dict]:
+    """A realistic training log: a session every couple of days across the window."""
+    rnd = random.Random(7)  # deterministic, like the metrics above
+    today = dt.date.today()
+    rows: list[dict] = []
+    for d in range(DAYS):
+        if d % 2 == 1:                       # roughly every other day is a rest day
+            continue
+        day = today - dt.timedelta(days=d)
+        sport, dist_range, hr_range = rnd.choice(_DEMO_SPORTS)
+        dur = rnd.randint(35, 85)
+        start = dt.datetime(day.year, day.month, day.day,
+                            rnd.choice([7, 8, 12, 18, 19]), 0, tzinfo=dt.timezone.utc)
+        avg = rnd.randint(*hr_range)
+        rows.append({
+            "external_id": f"demo-w-{d}",    # stable id -> idempotent reseed
+            "sport": sport,
+            "workout_date": day.isoformat(),
+            "start_time": start.isoformat(),
+            "end_time": (start + dt.timedelta(minutes=dur)).isoformat(),
+            "duration_min": float(dur),
+            "strain": round(rnd.uniform(8.0, 16.8), 1),
+            "avg_hr": avg,
+            "max_hr": avg + rnd.randint(20, 45),
+            "calories": float(rnd.randint(250, 800)),
+            "distance_m": float(rnd.randint(*dist_range)) if dist_range else None,
+        })
+    return rows
+
+
 def main() -> None:
     user_id = _get_or_create_demo_user()
     written = upsert_metrics(user_id, "whoop", _synthetic_metrics())
-    print(f"Demo User ready: id={user_id}, name='{DEMO_NAME}', {written} metrics over {DAYS} days.")
+    workouts = upsert_workouts(user_id, "whoop", _synthetic_workouts())
+    print(f"Demo User ready: id={user_id}, name='{DEMO_NAME}', "
+          f"{written} metrics + {workouts} workouts over {DAYS} days.")
 
 
 if __name__ == "__main__":
