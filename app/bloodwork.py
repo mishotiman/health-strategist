@@ -22,6 +22,7 @@ be numbers, so they're stored via a text_value instead.
 
 from __future__ import annotations
 
+import base64
 import datetime as dt
 import json
 
@@ -299,10 +300,59 @@ def extract_text(pdf_bytes: bytes) -> str:
     return text
 
 
-def extract_metrics(text: str) -> dict:
+# --------------------------------------------------------------------------- #
+# Reading the document: text layer when it's trustworthy, pixels when it isn't
+# --------------------------------------------------------------------------- #
+MIN_USABLE_CHARS = 100
+MIN_PRINTABLE_RATIO = 0.85
+
+
+def text_is_usable(text: str) -> bool:
+    """Whether an extracted text layer is worth sending to the model.
+
+    Emptiness is not the only failure. A PDF whose fonts are subsetted with
+    Identity-H encoding and no ToUnicode map yields raw *glyph indices* rather
+    than characters — the page renders perfectly but extraction returns control
+    codes. Handing that to the model is worse than failing: it will sometimes
+    classify the noise as a lab report and invent a plausible value, which then
+    gets stored as a real result.
+
+    Three cheap signals separate a real report from both cases: enough content
+    to be a document at all, mostly printable characters, and at least one digit
+    (a lab report without numbers isn't one).
+    """
+    stripped = (text or "").strip()
+    if len(stripped) < MIN_USABLE_CHARS:
+        return False
+    printable = sum(1 for c in stripped if c.isprintable() or c in "\n\r\t")
+    if printable / len(stripped) < MIN_PRINTABLE_RATIO:
+        return False
+    return any(c.isdigit() for c in stripped)
+
+
+def render_pages(pdf_bytes: bytes, max_pages: int = 10, dpi: int = 170) -> list[bytes]:
+    """Rasterize the first pages to PNG so the model can read them visually.
+
+    We render rather than handing over the raw PDF: the whole reason we're here
+    is that the embedded text is unusable, and a PDF sent as a document would let
+    the model read that same broken text layer. Pixels bypass it entirely.
+
+    170 dpi keeps lab tables legible while staying well under the per-image token
+    cost of full-resolution input; the page cap bounds a pathological upload.
+    """
+    doc = fitz.open(stream=pdf_bytes, filetype="pdf")
+    try:
+        return [doc[i].get_pixmap(dpi=dpi).tobytes("png")
+                for i in range(min(doc.page_count, max_pages))]
+    finally:
+        doc.close()
+
+
+def _instructions() -> str:
+    """The extraction brief, shared by the text and vision paths."""
     numeric_list = ", ".join(BLOODWORK_TYPES)
     qual_list = ", ".join(QUALITATIVE_TYPES)
-    prompt = (
+    return (
         "You are processing an uploaded document. First classify it via "
         "document_type (bloodwork / health_other / not_health) and give a short "
         "document_summary naming what it is.\n\n"
@@ -323,8 +373,17 @@ def extract_metrics(text: str) -> dict:
         "result -> 'pending'.\n\n"
         "Set report_date to the sample collection date (YYYY-MM-DD). For non-bloodwork "
         "documents, return metrics: [], qualitative: [], report_date: ''.\n\n"
-        f"DOCUMENT TEXT:\n{text}"
     )
+
+
+def _call_extractor(content) -> dict:
+    """Run the extractor and parse its JSON.
+
+    `content` is a Messages API content payload: a plain string for the text
+    path, or a list of image blocks followed by a text block for the vision path.
+    Both share one schema, model and retry policy so the two readers can never
+    drift apart.
+    """
     # Mechanical extraction: disable thinking (Sonnet 5 runs it by default, which
     # can consume the token budget and leave the JSON empty/truncated) and give a
     # generous ceiling so a large panel's JSON always fits. Retry once — model
@@ -336,7 +395,7 @@ def extract_metrics(text: str) -> dict:
             max_tokens=8192,
             thinking={"type": "disabled"}, # Disable adaptive thinking of Sonnet 5.
             output_config={"format": {"type": "json_schema", "schema": _SCHEMA}},
-            messages=[{"role": "user", "content": prompt}],
+            messages=[{"role": "user", "content": content}],
         )
         stop = msg.stop_reason
         raw = "".join(b.text for b in msg.content if b.type == "text").strip()
@@ -348,15 +407,45 @@ def extract_metrics(text: str) -> dict:
     raise ExtractionError(f"no parseable result from the extractor (stop_reason={stop})")
 
 
+def extract_metrics(text: str) -> dict:
+    """Read a report from its extracted text layer (the cheap, usual path)."""
+    return _call_extractor(_instructions() + f"DOCUMENT TEXT:\n{text}")
+
+
+def extract_metrics_from_pages(pages: list[bytes]) -> dict:
+    """Read a report from rendered page images, for PDFs whose text layer can't
+    be decoded. Note: citations must stay off — they're rejected alongside the
+    JSON-schema output format this relies on."""
+    content = [
+        {"type": "image",
+         "source": {"type": "base64", "media_type": "image/png",
+                    "data": base64.standard_b64encode(png).decode()}}
+        for png in pages
+    ]
+    content.append({"type": "text", "text": _instructions() +
+                    "The document is supplied as the page images above — this PDF has no "
+                    "readable text layer. Read every value directly from the images."})
+    return _call_extractor(content)
+
+
 def ingest_pdf(user_id: int, pdf_bytes: bytes) -> dict:
     text = extract_text(pdf_bytes)
-    if not text.strip():
-        return {"status": "unreadable", "metrics_written": 0,
-                "message": "I couldn't read any text from that PDF. If it's a scanned "
-                           "image, try a text-based export of your lab report."}
-
+    read_via = "text"
     try:
-        extracted = extract_metrics(text)
+        if text_is_usable(text):
+            extracted = extract_metrics(text)
+        else:
+            # No trustworthy text layer — a scan, or an embedded font with no
+            # ToUnicode map. Either way the page still renders, so read it
+            # visually rather than feeding the model noise it would happily
+            # extract fabricated values from.
+            pages = render_pages(pdf_bytes)
+            if not pages:
+                return {"status": "unreadable", "metrics_written": 0,
+                        "message": "I couldn't read anything from that PDF — it may be "
+                                   "empty or damaged. Try re-downloading it from your lab."}
+            read_via = "images"
+            extracted = extract_metrics_from_pages(pages)
     except (ExtractionError, anthropic.APIError):
         return {"status": "error", "metrics_written": 0,
                 "message": "I couldn't read that report just now — please try again in a moment."}
@@ -378,7 +467,7 @@ def ingest_pdf(user_id: int, pdf_bytes: bytes) -> dict:
     qual_accepted, qual_rejected = normalize_qualitative(extracted.get("qualitative", []))
     if not accepted and not qual_accepted:
         return {"status": "no_values", "document_type": doc_type, "metrics_written": 0,
-                "rejected": rejected + qual_rejected,
+                "rejected": rejected + qual_rejected, "read_via": read_via,
                 "message": "This looks like a lab report, but I couldn't confidently read "
                            "any of the values I track. It may use an unusual layout or units."}
 
@@ -396,6 +485,7 @@ def ingest_pdf(user_id: int, pdf_bytes: bytes) -> dict:
         "status": "ok",
         "source": "bloodwork",
         "report_date": date,
+        "read_via": read_via,           # "text" | "images" — which reader succeeded
         "metrics_written": written,
         "extracted": accepted,          # canonical values + 'reported' for audit
         "qualitative": qual_accepted,   # categorical results

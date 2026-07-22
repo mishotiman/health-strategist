@@ -13,6 +13,7 @@ from app.bloodwork import (
     in_range,
     normalize_metrics,
     normalize_qualitative,
+    text_is_usable,
 )
 from app.ingestion import CANONICAL_UNITS
 
@@ -98,6 +99,43 @@ def test_expanded_conversions(metric, value, unit, expected):
 def test_hs_crp_is_separate_from_crp():
     assert "hs_crp" in BLOODWORK_TYPES and "crp" in BLOODWORK_TYPES
     assert TARGET_UNITS["hs_crp"] == "mg/L"
+
+
+# --- is the extracted text layer trustworthy? --------------------------------
+def test_a_real_report_text_is_usable():
+    text = ("ALAB Laboratoria\nSprawozdanie z badan laboratoryjnych\n"
+            "Testosteron (O41)  6,19 ng/mL   zakres 2,49 - 8,36\n"
+            "Data wykonania badania: 13-06-2026\n") * 2
+    assert text_is_usable(text) is True
+
+
+def test_glyph_index_garbage_is_rejected():
+    """A subsetted font with no ToUnicode map extracts as control codes. The page
+    renders fine, but this must never reach the model — it will sometimes call the
+    noise a lab report and invent a value."""
+    garbage = "".join(chr(c) for c in range(4, 30)) * 40
+    assert text_is_usable(garbage) is False
+
+
+def test_mostly_garbage_with_a_little_text_is_rejected():
+    # real-world shape: a few legible header glyphs surrounded by control codes
+    mixed = "ALAB" + ("".join(chr(c) for c in range(4, 30)) * 20)
+    assert text_is_usable(mixed) is False
+
+
+def test_scanned_pdf_with_no_text_is_rejected():
+    assert text_is_usable("") is False
+    assert text_is_usable("   \n\t ") is False
+    assert text_is_usable(None) is False
+
+
+def test_prose_without_any_digits_is_rejected():
+    # a lab report always has numbers; a cover letter is not one
+    assert text_is_usable("Dear patient, please find enclosed a note from your doctor. " * 4) is False
+
+
+def test_a_few_stray_characters_are_rejected():
+    assert text_is_usable("page 1 of 2") is False       # under the length floor
 
 
 def test_normalize_qualitative_accepts_and_rejects():
