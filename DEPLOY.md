@@ -160,7 +160,9 @@ ACR Basic (~$5/mo) has no stop — only delete.
 ## Accounts & auth
 
 Real multi-user accounts: email + password (argon2id), plus Google and Microsoft
-sign-in. Email addresses must be **verified before the app is usable**. Visitors
+sign-in. Email verification is a **dismissible reminder, not a gate** — an
+unverified account has full access, so a mail lost to spam can never lock a user
+out. The flag still governs account linking, which is where it matters. Visitors
 with no account can choose "Try Health Strategist now" — a guest session that
 reads the sample account and writes nothing.
 
@@ -194,8 +196,10 @@ the live URL — Google Cloud Console and Azure AD ("Entra ID") respectively:
 <APP_BASE_URL>/auth/oauth/microsoft/callback
 ```
 
-> **Email deliverability matters here.** Because verification *blocks* access, a
-> verification mail that lands in spam locks a user out. Verify your own sending
+> **Email deliverability still matters.** Verification no longer blocks access, so
+> a lost mail is a nuisance rather than a lockout — but password *reset* has no
+> such fallback, and Resend's shared `onboarding@resend.dev` sender only delivers
+> to your own Resend account address. Verify your own sending
 > domain in Resend rather than shipping with the shared test sender. With no
 > `RESEND_API_KEY` set the link is written to the container logs instead, which
 > is how the flow is walked locally.

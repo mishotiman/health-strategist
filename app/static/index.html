@@ -57,6 +57,18 @@
   .authbtn { font-size:12px; padding:6px 12px; border-radius:8px; background:var(--panel);
              border:1px solid var(--line); color:var(--ink); cursor:pointer; }
   .authbtn:hover { border-color:var(--teal); }
+  /* unverified-email reminder. Amber, not red: nothing is broken and nothing is
+     blocked — it's a nudge, and it can be dismissed. */
+  #verify-banner { display:flex; align-items:center; gap:12px; padding:8px 20px;
+                   background:rgba(232,195,122,.10); border-bottom:1px solid rgba(232,195,122,.25);
+                   color:#e8c37a; font-size:12px; }
+  #verify-banner[hidden] { display:none; }
+  #verify-banner .vb-text { flex:1; }
+  #verify-banner button { background:transparent; border:1px solid rgba(232,195,122,.45);
+                          color:#e8c37a; border-radius:7px; padding:3px 10px; font-size:12px;
+                          cursor:pointer; font-weight:500; }
+  #verify-banner button:hover { border-color:#e8c37a; }
+  #verify-banner .vb-x { border:none; font-size:17px; line-height:1; padding:0 4px; }
   /* the WHOOP button plus its data-freshness note, stacked */
   .whoop-col { display:flex; flex-direction:column; gap:3px; }
   .sync-note { font-size:10px; color:var(--dim); text-align:center; line-height:1.2; }
@@ -198,6 +210,11 @@
   <button id="acctbtn" class="authbtn" type="button"></button>
 </header>
 <div id="welcome"><h2>Welcome to <span class="accent">PHS</span></h2></div>
+<div id="verify-banner" hidden>
+  <span class="vb-text">Confirm your email address to secure your account.</span>
+  <button id="vb-resend" type="button">Resend link</button>
+  <button id="vb-dismiss" type="button" class="vb-x" aria-label="Dismiss">&times;</button>
+</div>
 <div id="status"></div>
 
 <div id="chat">
@@ -377,10 +394,48 @@
     }
 
     renderWho();
+    renderVerifyBanner();
     restoreChat();
     await syncStatus();
+
+    if (bootParams.get('verified') === '1') {
+      try { localStorage.removeItem('phs_verify_dismissed'); } catch (e) {}
+      statusEl.textContent = '✓ Email verified — thanks.';
+      statusEl.className = 'ok';
+      statusEl.style.opacity = '1';
+      setTimeout(() => { statusEl.style.opacity = '0'; }, 4000);
+    }
     if (bootParams.get('whoop') === 'mismatch') await resolveWhoopMismatch();
   })();
+
+  // ---- unverified-email reminder -------------------------------------------
+  // A nudge, never a gate: an unverified address still has full access, because
+  // a mail that lands in spam must not be able to lock someone out of their own
+  // account. Dismissal sticks so it doesn't nag on every load.
+  function renderVerifyBanner() {
+    let dismissed = false;
+    try { dismissed = localStorage.getItem('phs_verify_dismissed') === '1'; } catch (e) {}
+    document.getElementById('verify-banner').hidden =
+      !(me.kind === 'user' && me.email_verified === false && !dismissed);
+  }
+
+  document.getElementById('vb-dismiss').onclick = () => {
+    document.getElementById('verify-banner').hidden = true;
+    try { localStorage.setItem('phs_verify_dismissed', '1'); } catch (e) {}
+  };
+
+  document.getElementById('vb-resend').onclick = async (e) => {
+    const btn = e.currentTarget;
+    btn.disabled = true;
+    btn.textContent = 'Sending…';
+    let sent = false;
+    try {
+      const r = await (await fetch('/auth/resend-verification', { method: 'POST' })).json();
+      sent = !!(r.sent || r.already_verified);
+    } catch (err) {}
+    btn.textContent = sent ? 'Sent ✓' : 'Try again later';
+    if (!sent) setTimeout(() => { btn.textContent = 'Resend link'; btn.disabled = false; }, 4000);
+  };
 
   // The user authorized a WHOOP account that isn't the one already connected.
   // Nothing has been changed server-side yet — replacing is destructive, so it

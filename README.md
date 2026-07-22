@@ -113,7 +113,7 @@ Container Apps secret store. Full runbook — deploy loop, DB seeding, cost cont
 gotchas — in [DEPLOY.md](DEPLOY.md).
 
 **Accounts.** Email + password (argon2id) or Google / Microsoft sign-in, with email
-verification required before the app unlocks and a self-serve password reset. Sessions are
+verification as a dismissible reminder (never a lockout) and a self-serve password reset. Sessions are
 server-side and revocable. Anyone can also pick **"Try Health Strategist now"** for a guest
 session that reads a sample dataset and saves nothing. Every write endpoint derives the user
 from the session, and WHOOP is connected per-account.

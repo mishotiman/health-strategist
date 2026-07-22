@@ -585,7 +585,7 @@
             errorText(r.data, "Incorrect email or password."),
             "err",
           );
-        if (!r.data.email_verified) return showVerify($("si-email").value);
+        // An unverified address no longer blocks sign-in — the chat UI nags instead.
         location.href = r.data.onboarded ? "/?welcome=1" : "/onboarding";
       };
 
@@ -603,7 +603,10 @@
             errorText(r.data, "Could not create that account."),
             "err",
           );
-        showVerify(email);
+        // Straight into setup. The verification mail is on its way, and the chat
+        // UI reminds them until they click it — a slow or spam-filed email must
+        // never strand someone outside their own account.
+        location.href = "/onboarding";
       };
 
       // ---- verification --------------------------------------------------------

@@ -135,18 +135,19 @@ def index(p: Principal = Depends(current_principal)):
     """The chat UI — but only once the visitor is actually allowed to see it.
 
     anon      -> login page
-    unverified-> the "check your email" screen (verification blocks access)
     not yet   -> the onboarding flow
     onboarded -> chat.  Guests skip straight to chat with sample data.
+
+    An unverified address does **not** block access. Verification is a reminder
+    (a dismissible banner in the chat UI), not a gate: mail lands in spam, DNS
+    lapses and free tiers throttle, and none of those should be able to lock a
+    user out of their own account. The flag is still tracked and still governs
+    account linking, which is where it actually carries weight.
     """
     if p.kind == "anon":
         return RedirectResponse(url="/login", status_code=303)
-    if p.kind == "user":
-        info = _user_info(p.user_id)
-        if not info["email_verified"]:
-            return RedirectResponse(url="/login?verify=pending", status_code=303)
-        if not info["onboarded"]:
-            return RedirectResponse(url="/onboarding", status_code=303)
+    if p.kind == "user" and not _user_info(p.user_id)["onboarded"]:
+        return RedirectResponse(url="/onboarding", status_code=303)
     return _page("index.html")
 
 
