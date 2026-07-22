@@ -61,6 +61,12 @@
   .whoop-col { display:flex; flex-direction:column; gap:3px; }
   .sync-note { font-size:10px; color:var(--dim); text-align:center; line-height:1.2; }
   .sync-note[hidden] { display:none; }
+  /* the living orb behind the chat. z-index:-1 paints it above the body's
+     background but below all content; it never intercepts clicks. */
+  /* width/height are required, not decorative: a canvas is a replaced element,
+     so without them it lays out at its *bitmap* size — on a scaled display
+     (dpr > 1) that overflows the viewport and drags the orb off-centre. */
+  #orb { position:fixed; inset:0; width:100%; height:100%; z-index:-1; pointer-events:none; }
   /* themed scrollbars */
   * { scrollbar-width: thin; scrollbar-color: #33475a transparent; }
   ::-webkit-scrollbar { width:10px; height:10px; }
@@ -143,6 +149,7 @@
 </style>
 </head>
 <body>
+<canvas id="orb" aria-hidden="true"></canvas>
 <div id="bw-modal" class="overlay" hidden>
   <div class="modal">
     <div class="modal-head">
@@ -166,6 +173,16 @@
     <div class="actions">
       <button id="confirm-cancel" class="ghost" type="button">Cancel</button>
       <button id="confirm-ok" type="button">Delete</button>
+    </div>
+  </div>
+</div>
+<div id="signin-modal" class="overlay" hidden>
+  <div class="modal confirm-box">
+    <h2>You'll need an account</h2>
+    <p id="signin-text"></p>
+    <div class="actions">
+      <button id="signin-cancel" class="ghost" type="button">Keep looking around</button>
+      <button id="signin-go" type="button">Log in</button>
     </div>
   </div>
 </div>
@@ -264,7 +281,7 @@
     if (me.kind === 'guest') {
       // Guests get no "User" field — just a way in.
       whoopbtn.textContent = 'Connect WHOOP';
-      whoopbtn.onclick = () => { location.href = '/login'; };   // needs an account
+      whoopbtn.onclick = () => askSignIn('connect your WHOOP');
       acctbtn.textContent = 'Log in';
       acctbtn.onclick = () => { location.href = '/login'; };
       renderSyncNote();
@@ -352,10 +369,11 @@
       }
       history = loadHistory();
     } else {
-      // Guest: a throwaway thread, and nothing touches localStorage.
+      // Guest: a throwaway thread, and nothing touches localStorage. The upload
+      // button stays visible — picking it explains why an account is needed
+      // instead of the option simply not being there (writes 401 regardless).
       threadId = 'guest-' + Math.random().toString(36).slice(2, 10);
       clearChat();
-      document.querySelector('.attach-wrap').hidden = true;   // no uploads without an account
     }
 
     renderWho();
@@ -414,6 +432,123 @@
   // Re-render the freshness note far more often than we re-sync, so "2 minutes
   // ago" keeps counting up between pulls. Pure local formatting — no requests.
   setInterval(renderSyncNote, 30 * 1000);
+
+  // ---- the living orb ------------------------------------------------------
+  // A sphere of wavy particle-like rings behind the chat, with two states:
+  //   idle     — perfectly still, except one slow human breath (~1s in, ~1s
+  //              out) every 15 seconds: alive, at rest.
+  //   thinking — while the agent is composing a reply: rotating, undulating,
+  //              continuously breathing.
+  // Plain canvas 2D — no libraries, DPI-aware, breaths skip hidden tabs, and a
+  // single static frame for users who prefer reduced motion.
+  const orbCtl = (function () {
+    const canvas = document.getElementById('orb');
+    if (!canvas || !canvas.getContext) return { thinking: function () {} };
+    const ctx = canvas.getContext('2d');
+    let W, H;
+    function fit() {
+      const dpr = Math.min(window.devicePixelRatio || 1, 2);
+      W = window.innerWidth; H = window.innerHeight;
+      canvas.width = W * dpr; canvas.height = H * dpr;
+      ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
+    }
+    window.addEventListener('resize', () => { fit(); if (mode === 'idle' && !raf) draw(pose, 1); });
+    fit();
+
+    // ring hues: theme teal leading, with the reference images' violet/blue behind
+    const HUES = ['45,212,191', '56,189,248', '139,92,246', '45,212,191', '167,139,250'];
+
+    // t sets the rings' pose (rotation/wobble); scale is the breath applied on top
+    function draw(t, scale) {
+      ctx.clearRect(0, 0, W, H);
+      const cx = W / 2, cy = H / 2;                       // dead centre of the viewport
+      const R = Math.min(W, H) * 0.30 * scale;
+
+      // ambient glow so the orb feels lit from within
+      const g = ctx.createRadialGradient(cx, cy, R * 0.1, cx, cy, R * 1.7);
+      g.addColorStop(0, 'rgba(45,212,191,0.10)');
+      g.addColorStop(0.55, 'rgba(99,102,241,0.05)');
+      g.addColorStop(1, 'rgba(15,23,32,0)');
+      ctx.fillStyle = g;
+      ctx.fillRect(cx - R * 1.8, cy - R * 1.8, R * 3.6, R * 3.6);
+
+      for (let i = 0; i < HUES.length; i++) {
+        const dir = i % 2 ? -1 : 1;                        // alternate rotation
+        const spin = t * 0.00012 * dir * (1 + i * 0.25);
+        const wob = t * 0.0003;
+        ctx.beginPath();
+        for (let a = 0; a <= Math.PI * 2 + 0.05; a += 0.045) {
+          const wave = 1                                   // layered waves -> organic edge
+            + 0.055 * Math.sin(3 * a + spin * 9 + i * 1.7)
+            + 0.035 * Math.sin(5 * a - wob + i * 2.3)
+            + 0.020 * Math.sin(8 * a + wob * 1.6 + i);
+          const r = R * wave * (0.86 + i * 0.05);
+          const squash = 0.90 + 0.05 * Math.sin(spin * 5 + i);  // slight 3D tilt
+          const x = cx + Math.cos(a + spin * 20) * r;
+          const y = cy + Math.sin(a + spin * 20) * r * squash;
+          a ? ctx.lineTo(x, y) : ctx.moveTo(x, y);
+        }
+        ctx.closePath();
+        ctx.strokeStyle = 'rgba(' + HUES[i] + ',' + (0.16 + 0.05 * Math.sin(t * 0.001 + i)) + ')';
+        ctx.lineWidth = 1.1;
+        ctx.stroke();
+      }
+    }
+
+    const still = window.matchMedia && window.matchMedia('(prefers-reduced-motion: reduce)').matches;
+
+    const BREATH_EVERY_MS = 15000;   // one breath each 15s at rest
+    const BREATH_MS = 2000;          // ~1s in, ~1s out
+    const BREATH_DEPTH = 0.06;       // how far the "chest" rises
+    let mode = 'idle';
+    let raf = null, breathTimer = null;
+    let pose = 0;                    // the rings' pose; advances only while thinking
+
+    function stopAnim() {
+      if (raf) cancelAnimationFrame(raf);
+      if (breathTimer) clearInterval(breathTimer);
+      raf = breathTimer = null;
+    }
+
+    function breatheOnce() {         // a single human breath: inhale, exhale
+      const t0 = performance.now();
+      const step = (now) => {
+        if (mode !== 'idle') return;                 // superseded by thinking
+        const p = Math.min((now - t0) / BREATH_MS, 1);
+        const env = Math.sin(Math.PI * p) ** 2;      // soft start, peak at 1s, soft end
+        draw(pose, 1 + BREATH_DEPTH * env);
+        raf = p < 1 ? requestAnimationFrame(step) : null;
+      };
+      raf = requestAnimationFrame(step);
+    }
+
+    function idle() {
+      mode = 'idle';
+      stopAnim();
+      draw(pose, 1);                 // freeze wherever the thinking spin left off
+      if (still) return;             // reduced motion: perfectly still, no breaths
+      breathTimer = setInterval(() => {
+        if (!document.hidden && !raf) breatheOnce();
+      }, BREATH_EVERY_MS);
+    }
+
+    function think() {
+      if (still || mode === 'thinking') return;
+      mode = 'thinking';
+      stopAnim();
+      const start = performance.now(), from = pose;
+      const loop = (now) => {
+        if (mode !== 'thinking') return;
+        pose = from + (now - start);
+        draw(pose, 1 + 0.045 * Math.sin(pose * 0.00055));   // continuous live breath
+        raf = requestAnimationFrame(loop);
+      };
+      raf = requestAnimationFrame(loop);
+    }
+
+    idle();   // paints the first frame synchronously, then rests
+    return { thinking: (on) => (on ? think() : idle()) };
+  })();
 
   // ---- render helpers -----------------------------------------------------
   function addUser(text) {
@@ -484,10 +619,32 @@
     if (!attachMenu.hidden && !e.target.closest('.attach-wrap')) attachMenu.hidden = true;
   });
 
-  document.getElementById('menu-add-bw').onclick = () => { attachMenu.hidden = true; openBw(); };
+  document.getElementById('menu-add-bw').onclick = () => {
+    attachMenu.hidden = true;
+    if (me.kind !== 'user') return askSignIn('upload bloodwork');
+    openBw();
+  };
   document.getElementById('bw-close').onclick = () => { bwModal.hidden = true; };
   bwModal.addEventListener('click', (e) => { if (e.target === bwModal) bwModal.hidden = true; });
   document.getElementById('bw-add').onclick = () => bwFile.click();
+
+  // Guests can read sample data but not write, so anything that would save
+  // something explains why and offers a way in, rather than silently doing
+  // nothing or jumping to the login page unannounced.
+  const signinModal = document.getElementById('signin-modal');
+  const signinText = document.getElementById('signin-text');
+  function askSignIn(action) {
+    signinText.textContent =
+      'You’re trying PHS as a guest, so nothing you do here is saved. To ' +
+      action + ' you’ll need an account — it only takes a moment, and your ' +
+      'data stays yours.';
+    signinModal.hidden = false;
+  }
+  document.getElementById('signin-cancel').onclick = () => { signinModal.hidden = true; };
+  document.getElementById('signin-go').onclick = () => { location.href = '/login'; };
+  signinModal.addEventListener('click', (e) => {
+    if (e.target === signinModal) signinModal.hidden = true;
+  });
 
   // in-app confirmation dialog (replaces the native window.confirm)
   const confirmModal = document.getElementById('confirm-modal');
@@ -602,6 +759,7 @@
     if (!q) return;
     input.value = '';
     send.disabled = true;
+    orbCtl.thinking(true);           // the orb comes alive while the agent works
     const hint = chat.querySelector('.hint');
     if (hint) hint.remove();
     addUser(q);
@@ -621,6 +779,7 @@
       bot.textContent = 'Error: ' + err;
       history.push({ role: 'bot', data: { answer: 'Error: ' + err } }); saveHistory();
     } finally {
+      orbCtl.thinking(false);        // back to rest — answer or error alike
       send.disabled = false;
       input.focus();
       chat.scrollTop = chat.scrollHeight;
