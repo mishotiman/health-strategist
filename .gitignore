@@ -8,11 +8,14 @@ venv/
 # Env / secrets
 .env
 
-# Corpus source files — keep the repo light; track data/sources.md instead
+# Corpus source files — keep the repo light; track data/sources.md +
+# data/corpus_topics.yml (the recipe) instead
 data/papers/*.pdf
 data/papers/*.PDF
 data/papers/*.xml
 data/papers/*.nxml
+# derived manifests (fetch index + dry-run preview)
+data/papers/_corpus_*.json
 
 # Derived plain-text corpus (regenerate with extract_text.py)
 data/text/

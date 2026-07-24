@@ -14,14 +14,19 @@ Endpoints:
 
 from __future__ import annotations
 
+import json
+import logging
 import os
 from dataclasses import dataclass
 
 import httpx
 from fastapi import Depends, FastAPI, File, HTTPException, Request, Response, UploadFile
-from fastapi.responses import FileResponse, JSONResponse, RedirectResponse
+from fastapi.responses import (FileResponse, JSONResponse, RedirectResponse,
+                               StreamingResponse)
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel
+
+log = logging.getLogger(__name__)
 
 from app import (agent, auth, bloodwork, connections, emailer, oidc,
                  session as sess, whoop)
@@ -525,6 +530,18 @@ def ask(req: AskRequest):
     return {"question": req.question, "answer": result["answer"], "sources": sources}
 
 
+@app.get("/corpus/stats")
+def corpus_stats():
+    """How many papers / passages back the RAG — surfaced in the UI header so
+    users can see answers are grounded in real literature. Public (no auth)."""
+    with get_connection() as conn, conn.cursor() as cur:
+        cur.execute("SELECT count(*) FROM documents")
+        documents = cur.fetchone()[0]
+        cur.execute("SELECT count(*) FROM chunks WHERE embedding IS NOT NULL")
+        passages = cur.fetchone()[0]
+    return {"documents": documents, "passages": passages}
+
+
 # ---- onboarding + ingestion ------------------------------------------------
 @app.post("/metrics")
 def ingest_metrics(req: MetricsRequest, user_id: int = Depends(require_user)):
@@ -643,9 +660,30 @@ def delete_bloodwork_document(doc_id: int, user_id: int = Depends(require_user))
 @app.post("/chat")
 def chat(req: ChatRequest, user_id: int = Depends(readable_user)):
     """Talk to the health-strategist agent as the logged-in user (or demo user).
-    The thread is namespaced per user so demo and real memory never mix."""
+    The thread is namespaced per user so demo and real memory never mix.
+    Non-streaming; kept as a fallback for /chat/stream."""
     thread = f"{user_id}:{req.thread_id}" if req.thread_id else None
     return agent.run(user_id, req.message, thread)
+
+
+@app.post("/chat/stream")
+def chat_stream(req: ChatRequest, user_id: int = Depends(readable_user)):
+    """The streaming counterpart to /chat: newline-delimited JSON events
+    (token…token…done) so the UI can reveal the answer as it's written. Sync
+    generator — FastAPI runs it in a worker thread, and the whole agent stack
+    is sync, so no async conversion is needed."""
+    thread = f"{user_id}:{req.thread_id}" if req.thread_id else None
+
+    def events():
+        try:
+            for ev in agent.stream_run(user_id, req.message, thread):
+                yield json.dumps(ev, default=str) + "\n"
+        except Exception:  # noqa: BLE001 - surface any failure to the client
+            log.exception("chat stream failed for user %s", user_id)
+            yield json.dumps({"type": "error",
+                              "message": "Something went wrong mid-response."}) + "\n"
+
+    return StreamingResponse(events(), media_type="application/x-ndjson")
 
 
 # ---- WHOOP OAuth -----------------------------------------------------------

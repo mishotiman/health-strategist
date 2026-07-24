@@ -12,9 +12,11 @@ pgvector
 anthropic
 voyageai
 openai  # fallback embeddings provider
+tenacity  # retry/backoff for bulk embedding + Europe PMC fetch
 
 # PDF / ingestion (used from Week 1 Tue onward)
 pymupdf
+pyyaml  # data/corpus_topics.yml — the corpus acquisition recipe
 
 # Eval harness (Week 2)
 langsmith

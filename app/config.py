@@ -13,6 +13,14 @@ class Settings(BaseSettings):
     # scripts/embed_chunks.py (reads OPENAI_API_KEY from the environment). It is
     # intentionally not surfaced here because nothing at runtime reads it.
 
+    # Embeddings — the model and dimensions MUST be identical on the corpus side
+    # (scripts/embed_chunks.py) and the query side (app/rag.py), or retrieval
+    # silently returns garbage. Change both at once by editing these two values.
+    # voyage-3.5 supports Matryoshka dims (256/512/1024); 512 halves storage/RAM
+    # vs 1024 with negligible quality loss.
+    embedding_model: str = "voyage-3.5"
+    embedding_dim: int = 512
+
     whoop_client_id: str = ""
     whoop_client_secret: str = ""
 

@@ -5,7 +5,8 @@
 Reads data/text/*.txt (produced by extract_text.py) and data/text/_metadata.json,
 splits each paper into recursive/structure-aware chunks, and loads them.
 Embeddings are left NULL here — filled later by embed_chunks.py. Re-running is
-idempotent (truncate + reload).
+incremental and idempotent: a paper already loaded (matched by its `source`) is
+skipped, so only new papers are chunked — safe to run repeatedly as the corpus grows.
 """
 
 from __future__ import annotations
@@ -117,35 +118,45 @@ def main() -> None:
     if not paths:
         raise SystemExit(f"No text files in {TEXT_DIR} — run extract_text.py first.")
 
+    loaded = skipped = total_chunks = 0
     with psycopg.connect(DATABASE_URL) as conn:
         with conn.cursor() as cur:
-            cur.execute("TRUNCATE chunks, documents RESTART IDENTITY CASCADE;")
-
-            total_chunks = 0
             for path in paths:
                 key = os.path.basename(path)
                 meta = metadata.get(key, {"title": key, "authors": "",
                                           "year": None, "source": ""})
+                # Idempotent by `source` (the natural key from migrate_corpus.sql):
+                # a paper already loaded returns no row, so we skip re-chunking it.
                 cur.execute(
-                    "INSERT INTO documents (title, source, authors, year) "
-                    "VALUES (%s, %s, %s, %s) RETURNING id",
-                    (meta["title"], meta["source"], meta["authors"], meta["year"]),
+                    "INSERT INTO documents "
+                    "  (title, source, authors, year, pmcid, doi, license, pillar) "
+                    "VALUES (%s, %s, %s, %s, %s, %s, %s, %s) "
+                    "ON CONFLICT (source) DO NOTHING RETURNING id",
+                    (meta["title"], meta["source"], meta["authors"], meta["year"],
+                     meta.get("pmcid"), meta.get("doi"), meta.get("license"),
+                     meta.get("pillar")),
                 )
-                doc_id = cur.fetchone()[0]
+                row = cur.fetchone()
+                if row is None:
+                    skipped += 1
+                    continue
+                doc_id = row[0]
 
                 chunks = blocks_to_chunks(parse_txt(path))
-                for idx, ch in enumerate(chunks):
-                    cur.execute(
-                        "INSERT INTO chunks (document_id, chunk_index, content, page) "
-                        "VALUES (%s, %s, %s, %s)",
-                        (doc_id, idx, ch["content"], ch["page"]),
-                    )
+                cur.executemany(
+                    "INSERT INTO chunks (document_id, chunk_index, content, page) "
+                    "VALUES (%s, %s, %s, %s)",
+                    [(doc_id, idx, ch["content"], ch["page"])
+                     for idx, ch in enumerate(chunks)],
+                )
+                loaded += 1
                 total_chunks += len(chunks)
                 print(f"  {key:48} -> {len(chunks):4} chunks")
 
         conn.commit()
 
-    print(f"\nDone: {len(paths)} documents, {total_chunks} chunks loaded.")
+    print(f"\nDone: {loaded} new documents ({total_chunks} chunks); "
+          f"{skipped} already present.")
 
 
 if __name__ == "__main__":

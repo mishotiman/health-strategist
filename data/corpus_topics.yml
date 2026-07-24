@@ -1,0 +1,107 @@
+# The corpus "recipe" — which science PHS retrieves over.
+#
+# scripts/fetch_corpus.py reads this file, runs each pillar's queries against the
+# Europe PMC search API (open-access subset only), and downloads up to `cap`
+# full-text JATS XML papers per pillar into data/papers/. Rebalancing the corpus
+# is an edit here, not a code change.
+#
+# Scope: PHYSICAL well-being only — no mental-performance / cognitive papers.
+# Curation is the precision lever: `pub_types` biases every query toward
+# high-evidence syntheses (one good review beats 30 scattered primary RCTs for an
+# advisor). Caps are tunable within the ~3–5k band; raise them toward 10k once the
+# reranker (see the project backlog) lands.
+
+defaults:
+  year_min: 2015                  # prefer reasonably current evidence
+  pub_types:                      # soft preference; fetch broadens if a query is sparse
+    - systematic review
+    - meta-analysis
+    - review
+    - guideline
+  # Adult + physical focus. Excluded from EVERY pillar's query (AND NOT (...)):
+  # pediatric populations, low-evidence anecdote, and the cognitive/mental-health
+  # domain (PHS is physical-only). A pillar's own `exclude` is OR'd onto this.
+  # (a) pediatric populations, (b) low-evidence anecdote, (c) the cognitive/mental
+  # domain (PHS is physical-only), (d) clinical disease-treatment populations that
+  # aren't the healthy-adult optimisation audience. "cancer" is deliberately NOT
+  # excluded — it's too entangled with legitimate longevity/prevention science.
+  exclude: 'children OR adolescents OR pediatric OR paediatric OR infants OR neonatal OR "case report" OR "case series" OR cognition OR cognitive OR dementia OR "mental health" OR depression OR anxiety OR psychosis OR schizophrenia OR "heart failure" OR "kidney disease" OR dialysis OR cirrhosis OR COPD OR "chronic obstructive" OR HIV OR transplant OR "critically ill" OR "intensive care" OR hospitalized OR hospitalised'
+
+# Sum of caps below ≈ 4,000. Fat loss (pillars 12+13) is intentionally the heaviest.
+pillars:
+  # --- Deepen the existing focus -------------------------------------------
+  - name: resistance_training
+    cap: 400
+    queries:
+      - '(resistance training OR strength training OR weightlifting OR "resistance exercise") AND (hypertrophy OR "muscle strength" OR "muscle mass" OR "muscle protein synthesis")'
+      - '("training volume" OR "training frequency" OR "progressive overload" OR periodization OR "repetitions in reserve") AND (strength OR hypertrophy)'
+
+  - name: endurance_vo2max
+    cap: 300
+    queries:
+      - '(endurance training OR aerobic training OR "cardiorespiratory fitness") AND ("VO2max" OR "maximal oxygen uptake" OR "aerobic capacity" OR "work economy")'
+      - '("polarized training" OR "high intensity interval training" OR HIIT OR "training intensity distribution" OR "zone 2") AND (endurance OR performance)'
+
+  - name: recovery_modalities
+    cap: 250
+    queries:
+      - '("cold water immersion" OR cryotherapy OR "ice bath" OR sauna OR "heat therapy" OR "compression garment" OR "massage" OR foam rolling) AND (recovery OR "muscle damage" OR soreness OR DOMS)'
+
+  - name: sleep
+    cap: 275
+    queries:
+      - '(sleep OR "sleep quality" OR "sleep extension" OR "sleep deprivation" OR "sleep hygiene") AND (athlete OR performance OR recovery OR "physical health" OR "muscle recovery")'
+
+  - name: sports_nutrition
+    cap: 275
+    queries:
+      - '("protein intake" OR "dietary protein" OR carbohydrate OR "nutrient timing" OR hydration OR "post-exercise nutrition") AND (muscle OR performance OR recovery OR adaptation)'
+
+  - name: supplements
+    cap: 275
+    queries:
+      - '(creatine OR caffeine OR "omega-3" OR "vitamin D" OR magnesium OR "beta-alanine" OR "sodium bicarbonate" OR "dietary nitrate" OR beetroot) AND (exercise OR performance OR muscle OR recovery OR strength)'
+
+  - name: stress_hrv
+    cap: 200
+    queries:
+      - '("heart rate variability" OR "autonomic nervous system" OR "physiological stress" OR cortisol OR overtraining OR "allostatic load") AND (recovery OR training OR "physical performance" OR adaptation)'
+
+  # --- New physical branches ------------------------------------------------
+  - name: aging_longevity
+    cap: 350
+    queries:
+      - '(aging OR ageing OR longevity OR healthspan OR sarcopenia OR "older adults") AND (exercise OR "resistance training" OR "physical function" OR "muscle mass" OR frailty)'
+      - '("cardiorespiratory fitness" OR "VO2max" OR "grip strength" OR "muscle strength" OR "physical activity") AND (mortality OR longevity OR "all-cause")'
+
+  - name: energy_metabolism
+    cap: 300
+    exclude: 'malnutrition OR rickets OR "developing countries"'
+    queries:
+      - '(fatigue OR "energy metabolism" OR mitochondria OR "iron deficiency" OR ferritin OR anemia OR "thyroid function") AND (exercise OR "physical performance" OR vitality OR "physical activity")'
+      - '("blood glucose" OR "insulin sensitivity" OR "glycemic control" OR "metabolic flexibility") AND (exercise OR diet OR "physical activity")'
+
+  - name: cardiometabolic
+    cap: 350
+    queries:
+      - '("blood pressure" OR hypertension OR cholesterol OR "LDL cholesterol" OR triglycerides OR "HbA1c" OR "C-reactive protein" OR "metabolic syndrome") AND (exercise OR diet OR "lifestyle intervention" OR "physical activity")'
+
+  - name: hormonal
+    cap: 275
+    queries:
+      - '(testosterone OR cortisol OR "growth hormone" OR "thyroid hormone" OR "menstrual cycle" OR estrogen OR "insulin-like growth factor") AND (exercise OR training OR "physical performance" OR "body composition")'
+
+  # --- Fat loss: the heaviest focus (state-of-the-art / best / easiest) ------
+  - name: fat_loss_methods
+    cap: 500
+    year_min: 2018                # bias toward state-of-the-art methods
+    queries:
+      - '("weight loss" OR "fat loss" OR "fat mass" OR adiposity) AND ("caloric restriction" OR "energy deficit" OR "dietary intervention" OR "diet quality" OR "high protein diet")'
+      - '("intermittent fasting" OR "time-restricted eating" OR "time restricted feeding" OR "alternate day fasting") AND ("weight loss" OR "fat mass" OR "body composition")'
+      - '(exercise OR "physical activity" OR "high intensity interval training" OR "resistance training" OR "non-exercise activity thermogenesis" OR "step count") AND ("fat loss" OR "weight loss" OR "fat mass")'
+      - '("weight loss maintenance" OR "appetite regulation" OR satiety OR "GLP-1 receptor agonist" OR semaglutide) AND (obesity OR overweight OR "weight management")'
+
+  - name: body_composition
+    cap: 275
+    queries:
+      - '("body composition" OR "energy balance" OR "body recomposition" OR "lean body mass" OR "protein and satiety") AND (diet OR exercise OR "weight management" OR "fat-free mass")'

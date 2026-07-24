@@ -25,7 +25,7 @@ if os.environ.get("LANGSMITH_API_KEY"):
     os.environ.setdefault("LANGSMITH_TRACING", "true")
 
 from langchain_anthropic import ChatAnthropic
-from langchain_core.messages import HumanMessage, SystemMessage
+from langchain_core.messages import AIMessageChunk, HumanMessage, SystemMessage
 from langchain_core.runnables import RunnableConfig
 from langchain_core.tools import tool
 from langgraph.checkpoint.memory import MemorySaver
@@ -48,6 +48,10 @@ personalized guidance to achieve their goals, or discover practical tips \
 to improve their health.
 
 How to work:
+- Call tools silently. Do NOT narrate or announce tool use ("Let me check…", \
+"I'll look up…"). Produce prose only in your final answer — the response is \
+streamed to the user as you write it, so any pre-tool narration would show up \
+as noise before the real answer.
 - Use `knowledge_search` for any claim about training, nutrition, supplements, \
 sleep, recovery, or stress. Cite the sources it returns, e.g. [1], [2].
 - Use `health_data` to personalize with the user's WHOOP metrics (recovery, HRV, \
@@ -200,3 +204,62 @@ def run(user_id: int, message: str, thread_id: str | None = None) -> dict:
         "tools_used": tools_used,
         "sources": citations,  # [{n, title, url}] for linking [n] citations
     }
+
+
+def stream_run(user_id: int, message: str, thread_id: str | None = None):
+    """Same turn as run(), but yields the answer incrementally so the UI can
+    reveal it as it's written. Emits plain dicts:
+
+        {"type": "token", "text": ...}   an increment of the answer
+        {"type": "done",  ...}           final metadata (sources, tools_used)
+
+    stream_mode=["updates", "messages"] gives both signals in one pass: the
+    "messages" mode streams per-token AIMessageChunks (the text), while
+    "updates" surfaces each node's output so we can harvest which tools ran.
+    Citations are filled by knowledge_search during the tool phase, which
+    precedes the final answer, so `citations` is complete by the "done" event.
+    """
+    thread_id = thread_id or f"user-{user_id}"
+    citations: list[dict] = []
+    config = {"configurable": {"user_id": user_id, "thread_id": thread_id,
+                               "citations": citations}}
+    tools_seen: set[str] = set()
+    final_answer = ""
+
+    for mode, chunk in _agent.stream(
+            {"messages": [HumanMessage(content=message)]},
+            config=config, stream_mode=["updates", "messages"]):
+        if mode == "messages":
+            msg_chunk, _meta = chunk
+            # Stream ONLY assistant text. "messages" mode also emits ToolMessage
+            # chunks (the raw retrieved passages) — streaming those would dump
+            # the research corpus into the bubble before the answer. The model
+            # calls tools silently (system prompt), so tool-calling turns carry
+            # no prose and only the final answer streams.
+            if isinstance(msg_chunk, AIMessageChunk):
+                text = _text(msg_chunk.content)
+                if text:
+                    yield {"type": "token", "text": text}
+        elif mode == "updates":
+            for node_out in chunk.values():
+                turn_called_tool = False
+                for m in (node_out or {}).get("messages", []):
+                    tool_calls = getattr(m, "tool_calls", None) or []
+                    for tc in tool_calls:
+                        tools_seen.add(tc["name"])
+                    if tool_calls:
+                        turn_called_tool = True
+                    # The final answer is the last AI message with no tool call —
+                    # the same message run() returns as `answer`.
+                    if getattr(m, "type", "") == "ai" and not tool_calls:
+                        text = _text(getattr(m, "content", ""))
+                        if text:
+                            final_answer = text
+                # A turn that ends in a tool call means anything streamed during
+                # it was pre-tool narration ("Let me look that up…") — tell the
+                # client to discard it so only the real answer remains.
+                if turn_called_tool:
+                    yield {"type": "reset"}
+
+    yield {"type": "done", "thread_id": thread_id, "answer": final_answer,
+           "tools_used": sorted(tools_seen), "sources": citations}

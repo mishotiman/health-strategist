@@ -1,6 +1,10 @@
 services:
   db:
     image: pgvector/pgvector:pg16
+    # Postgres uses /dev/shm for parallel index builds; Docker's 64MB default is
+    # too small for the HNSW build (scripts/index_corpus.sql), which errors with
+    # "No space left on device". Raise it so the corpus index builds locally.
+    shm_size: 1gb
     environment:
       POSTGRES_USER: phs
       POSTGRES_PASSWORD: phs

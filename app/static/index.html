@@ -14,12 +14,21 @@
   header h1 { font-size:16px; margin:0; font-weight:600; }
   header .dot { width:9px; height:9px; border-radius:50%; background:var(--teal); }
   header .sub { color:var(--dim); font-size:12px; margin-left:auto; }
+  header .corpus { font-size:11px; color:var(--dim); background:var(--panel);
+                   border:1px solid var(--line); border-radius:999px; padding:2px 9px;
+                   white-space:nowrap; }
+  header .corpus[hidden] { display:none; }
   #status { font-size:12px; color:var(--dim); padding:6px 20px; border-bottom:1px solid var(--line); min-height:0; transition:opacity .4s; }
   #status.ok { color:var(--teal); }
   #chat { flex:1; overflow-y:auto; padding:20px; display:flex; flex-direction:column; gap:14px; max-width:780px; width:100%; margin:0 auto; }
   .msg { padding:12px 16px; border-radius:12px; line-height:1.55; max-width:90%; }
   .user { align-self:flex-end; background:#1f3a4d; white-space:pre-wrap; }
   .bot { align-self:flex-start; background:var(--panel); border:1px solid var(--line); }
+  /* blinking caret shown while the answer is still streaming in */
+  .bot .caret { display:inline-block; width:7px; height:1.05em; margin-left:1px;
+                background:var(--teal); border-radius:1px; vertical-align:text-bottom;
+                animation:caretBlink 1.05s steps(1) infinite; }
+  @keyframes caretBlink { 50% { opacity:0; } }
   /* markdown inside bot messages */
   .bot > :first-child { margin-top:0; } .bot > :last-child { margin-bottom:0; }
   .bot h1,.bot h2,.bot h3 { margin:14px 0 6px; line-height:1.3; }
@@ -201,6 +210,8 @@
 <header>
   <span class="dot"></span>
   <h1>Personal Health Strategist</h1>
+  <span id="corpus" class="corpus" hidden
+        title="Peer-reviewed studies the agent searches to ground its answers"></span>
   <span class="sub"></span>
   <span id="who" class="who"></span>
   <span class="whoop-col">
@@ -372,6 +383,18 @@
     setTimeout(() => w.classList.remove('on'), 1900);
   }
 
+  // Corpus size for the header badge — shows the RAG is grounded in real papers.
+  async function loadCorpusStats() {
+    try {
+      const s = await (await fetch('/corpus/stats')).json();
+      if (s && s.documents) {
+        const el = document.getElementById('corpus');
+        el.textContent = '🔬 ' + s.documents.toLocaleString() + ' studies';
+        el.hidden = false;
+      }
+    } catch (e) {}
+  }
+
   (async () => {
     try { me = await (await fetch('/me')).json(); } catch (e) {}
     if (me.kind === 'anon') { location.href = '/login'; return; }
@@ -394,6 +417,7 @@
     }
 
     renderWho();
+    loadCorpusStats();
     renderVerifyBanner();
     restoreChat();
     await syncStatus();
@@ -807,6 +831,102 @@
     }
   };
 
+  // ---- streaming answer (typewriter) --------------------------------------
+  // The "satisfying" feel comes from decoupling display from the network:
+  // incoming tokens land in `pending` (a queue) and a requestAnimationFrame
+  // loop drains them at a steady, self-pacing rate into `shown`. Bursty network
+  // delivery becomes smooth typing. Throws StreamUnavailable *before* the first
+  // token so the caller can fall back to /chat; a failure mid-stream keeps the
+  // partial answer instead (re-running would double the cost and the reply).
+  class StreamUnavailable extends Error {}
+
+  const TYPE_MS = 16;   // reveal cadence (~60fps when the tab is visible)
+
+  function streamAnswer(bot, q) {
+    let pending = '', shown = '', streamDone = false, meta = null, firstToken = true;
+    let timer = 0, resolveDrained;
+    const drained = new Promise(r => { resolveDrained = r; });
+
+    function paint() {
+      bot.innerHTML = marked.parse(shown);
+      bot.querySelectorAll('a').forEach(a => { a.target = '_blank'; a.rel = 'noopener'; });
+      bot.insertAdjacentHTML('beforeend', '<span class="caret"></span>');
+    }
+    // setTimeout, not requestAnimationFrame: rAF is paused while the tab is
+    // hidden, which would freeze the reveal and leave the turn never finalizing
+    // if the user switches away mid-answer. A timer keeps draining (throttled in
+    // the background) so it always completes; when visible it's just as smooth.
+    function tick() {
+      if (pending.length) {
+        // reveal a slice; speed up when we're falling behind so long answers
+        // never lag far behind generation, stay smooth when nearly caught up
+        const n = Math.max(2, Math.ceil(pending.length / 30));
+        shown += pending.slice(0, n);
+        pending = pending.slice(n);
+        paint();
+        chat.scrollTop = chat.scrollHeight;
+      }
+      if (pending.length || !streamDone) timer = setTimeout(tick, TYPE_MS);
+      else resolveDrained();
+    }
+
+    return (async () => {
+      let res;
+      try {
+        res = await fetch('/chat/stream', {
+          method: 'POST', headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ message: q, thread_id: threadId })
+        });
+      } catch (e) { throw new StreamUnavailable(e.message); }
+      if (!res.ok || !res.body) throw new StreamUnavailable('no stream body');
+
+      timer = setTimeout(tick, TYPE_MS);
+      const reader = res.body.getReader();
+      const dec = new TextDecoder();
+      let buf = '';
+      try {
+        while (true) {
+          const { value, done } = await reader.read();
+          if (done) break;
+          buf += dec.decode(value, { stream: true });
+          let nl;
+          while ((nl = buf.indexOf('\n')) >= 0) {
+            const line = buf.slice(0, nl).trim();
+            buf = buf.slice(nl + 1);
+            if (!line) continue;
+            let ev; try { ev = JSON.parse(line); } catch (e) { continue; }
+            if (ev.type === 'token') {
+              if (firstToken) { firstToken = false; orbCtl.thinking(false); }
+              pending += ev.text;
+            } else if (ev.type === 'reset') {
+              // that turn was pre-tool narration — drop it and wait for the answer
+              pending = ''; shown = ''; firstToken = true;
+              bot.textContent = 'Thinking…';
+              orbCtl.thinking(true);
+            } else if (ev.type === 'done') {
+              meta = ev;
+            } else if (ev.type === 'error') {
+              pending += '\n\n_(response interrupted)_';
+            }
+          }
+        }
+      } catch (e) {
+        pending += '\n\n_(connection lost)_';   // keep the partial answer
+      }
+      streamDone = true;
+      await drained;                              // let the typewriter finish
+
+      // Authoritative final render: use the server's final answer text so the
+      // result is byte-identical to the non-streaming path, then chips.
+      const data = meta
+        ? { answer: meta.answer || shown, sources: meta.sources,
+            tools_used: meta.tools_used, thread_id: meta.thread_id }
+        : { answer: shown };
+      renderBot(bot, data);
+      return data;
+    })();
+  }
+
   // ---- chat ---------------------------------------------------------------
   form.addEventListener('submit', async (e) => {
     e.preventDefault();
@@ -822,13 +942,20 @@
     const bot = addBot();
     chat.scrollTop = chat.scrollHeight;
     try {
-      const res = await fetch('/chat', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ message: q, thread_id: threadId })
-      });
-      const data = await res.json();
-      renderBot(bot, data);
+      let data;
+      try {
+        data = await streamAnswer(bot, q);
+      } catch (streamErr) {
+        // Streaming never started — fall back to the plain endpoint. (Only here,
+        // pre-token, so a mid-stream failure never re-runs the agent.)
+        if (!(streamErr instanceof StreamUnavailable)) throw streamErr;
+        const res = await fetch('/chat', {
+          method: 'POST', headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ message: q, thread_id: threadId })
+        });
+        data = await res.json();
+        renderBot(bot, data);
+      }
       history.push({ role: 'bot', data }); saveHistory();
     } catch (err) {
       bot.textContent = 'Error: ' + err;

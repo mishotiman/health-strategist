@@ -1,5 +1,5 @@
 -- Runs once on first `docker compose up` (empty volume) via the postgres init hook.
--- pgvector + the full PHS schema. voyage-3 embeddings = 1024 dimensions.
+-- pgvector + the full PHS schema. voyage-3.5 embeddings = 512 dimensions.
 
 CREATE EXTENSION IF NOT EXISTS vector;
 
@@ -180,11 +180,21 @@ CREATE UNIQUE INDEX IF NOT EXISTS uq_workouts
 CREATE TABLE IF NOT EXISTS documents (
     id       BIGSERIAL PRIMARY KEY,
     title    TEXT,
-    source   TEXT,                      -- journal / DOI / URL for citation
+    source   TEXT,                      -- journal / DOI / URL for citation (natural key)
     authors  TEXT,
     year     INT,
+    pmcid    TEXT,                      -- Europe PMC id (bulk corpus); NULL for hand-picked
+    doi      TEXT,
+    license  TEXT,                      -- e.g. "cc by" — from the fetch sidecar
+    pillar   TEXT,                      -- corpus topic tag (see data/corpus_topics.yml)
     added_at TIMESTAMPTZ NOT NULL DEFAULT now()
 );
+
+-- Idempotent corpus ingestion keys on `source` (always present, unlike pmcid);
+-- the topic/year indexes support the deferred metadata-filtering retrieval pass.
+CREATE UNIQUE INDEX IF NOT EXISTS uq_documents_source ON documents (source);
+CREATE INDEX IF NOT EXISTS ix_documents_pillar ON documents (pillar);
+CREATE INDEX IF NOT EXISTS ix_documents_year   ON documents (year);
 
 CREATE TABLE IF NOT EXISTS chunks (
     id          BIGSERIAL PRIMARY KEY,
@@ -192,7 +202,7 @@ CREATE TABLE IF NOT EXISTS chunks (
     chunk_index INT,
     content     TEXT NOT NULL,
     page        INT,
-    embedding   vector(1024)
+    embedding   vector(512)
 );
 
 -- Conversation memory -----------------------------------------------------
@@ -204,5 +214,6 @@ CREATE TABLE IF NOT EXISTS messages (
     created_at TIMESTAMPTZ NOT NULL DEFAULT now()
 );
 
--- Note: add an ANN index (ivfflat/hnsw) on chunks.embedding once real data
--- is loaded — building it on an empty table is pointless.
+-- Note: the ANN index (HNSW) on chunks.embedding is built separately, after the
+-- corpus is embedded — see scripts/index_corpus.sql (building it on an empty
+-- table is pointless).

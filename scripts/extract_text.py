@@ -23,6 +23,7 @@ import fitz  # PyMuPDF
 
 PAPERS_DIR = os.path.join(os.path.dirname(__file__), "..", "data", "papers")
 TEXT_DIR = os.path.join(os.path.dirname(__file__), "..", "data", "text")
+CORPUS_INDEX = os.path.join(PAPERS_DIR, "_corpus_index.json")  # written by fetch_corpus.py
 
 
 def _text(el: ET.Element | None) -> str:
@@ -60,7 +61,8 @@ def from_jats(path: str) -> tuple[dict, str]:
     pmcid = pmcid_match.group(1) if pmcid_match else ""
     source = (f"https://doi.org/{doi}" if doi
               else f"https://pmc.ncbi.nlm.nih.gov/articles/{pmcid}/")
-    meta = {"title": title, "authors": ", ".join(authors), "year": year, "source": source}
+    meta = {"title": title, "authors": ", ".join(authors), "year": year, "source": source,
+            "pmcid": pmcid, "doi": doi}
 
     out: list[str] = [f"# {title}\n"]
     abstract = root.find(".//abstract")
@@ -99,7 +101,8 @@ def from_pdf(path: str) -> tuple[dict, str]:
 
     meta = {"title": "The Resistance Training Dose-Response (Pelland et al., 2024)",
             "authors": "Pelland, Remmert, Robinson, Hinson, Zourdos", "year": 2024,
-            "source": "https://sportrxiv.org/index.php/server/preprint/view/460"}
+            "source": "https://sportrxiv.org/index.php/server/preprint/view/460",
+            "pmcid": "", "doi": ""}
     return meta, "\n".join(out)
 
 
@@ -110,9 +113,15 @@ def main() -> None:
     if not paths:
         raise SystemExit(f"No papers found in {PAPERS_DIR}")
 
+    # license + pillar tags written by fetch_corpus.py, keyed by source filename.
+    sidecar = json.load(open(CORPUS_INDEX, encoding="utf-8")) if os.path.exists(CORPUS_INDEX) else {}
+
     metadata: dict[str, dict] = {}
     for path in paths:
         meta, text = from_pdf(path) if path.endswith(".pdf") else from_jats(path)
+        tags = sidecar.get(os.path.basename(path), {})
+        meta["license"] = tags.get("license", "")
+        meta["pillar"] = tags.get("pillar")
         out_name = os.path.splitext(os.path.basename(path))[0] + ".txt"
         with open(os.path.join(TEXT_DIR, out_name), "w", encoding="utf-8") as f:
             f.write(text)

@@ -16,7 +16,7 @@ LangGraph agent decides which tools to use per question.
 ```mermaid
 flowchart TD
     U([User]) -->|POST /chat| A{{"LangGraph Agent<br/>(Claude Opus 4.8)"}}
-    A -->|knowledge_search| R["RAG · pgvector<br/>13 CC-BY papers"]
+    A -->|knowledge_search| R["RAG · pgvector<br/>curated OA corpus"]
     A -->|health_data| H[("health_metrics<br/>normalized")]
     A -->|memory| P[("profile · goals")]
     A -. always-on guardrail<br/>no diagnosis / defer .-> A
@@ -27,7 +27,7 @@ flowchart TD
         W["WHOOP OAuth2 (v2)"] --> N[Normalizer]
         B["Bloodwork PDF<br/>Sonnet extraction + unit conversion"] --> N
         N --> H
-        DOC["Open-access papers"] --> EX["extract → chunk → voyage-3 embed"] --> R
+        DOC["Open-access papers<br/>Europe PMC"] --> EX["extract → chunk → voyage-3.5 embed"] --> R
     end
 
     subgraph EVAL["Eval — LangSmith"]
@@ -48,9 +48,9 @@ flowchart TD
   normalize into a single `health_metrics` shape (`source · date · metric_type · value ·
   unit`). Bloodwork values are extracted from messy lab PDFs by Claude with **unit
   conversion** to canonical units.
-- **Grounded answers with citations.** Retrieval over 13 CC-BY sports-science papers
-  (voyage-3 embeddings in pgvector); answers cite their sources and admit when the corpus
-  doesn't cover a topic.
+- **Grounded answers with citations.** Retrieval over a curated open-access sports-science
+  & physical-health corpus (Europe PMC, voyage-3.5 embeddings in pgvector); answers cite
+  their sources and admit when the corpus doesn't cover a topic.
 - **Measured quality.** Golden-set evals in LangSmith for both the RAG pipeline and the
   agent's behavior.
 
@@ -101,7 +101,7 @@ signal on the harder set is where the numbers *drop*.
 ## Tech stack
 
 FastAPI · PostgreSQL + pgvector · Claude (Opus 4.8 agent, Sonnet 5 RAG answers +
-bloodwork extraction, Haiku 4.5 eval judge) · Voyage `voyage-3` embeddings · LangGraph + LangChain + LangSmith ·
+bloodwork extraction, Haiku 4.5 eval judge) · Voyage `voyage-3.5` embeddings · LangGraph + LangChain + LangSmith ·
 WHOOP OAuth2 · PyMuPDF · Docker Compose · a thin static chat UI (Next.js is a documented
 future upgrade).
 
@@ -127,11 +127,18 @@ cp .env.example .env          # then fill in the API keys
 # 2. start the stack (FastAPI + Postgres/pgvector)
 docker compose up -d --build
 
-# 3. build the corpus  (papers listed in data/sources.md)
-#    place the source files in data/papers/, then:
+# 3. build the corpus
+#    a) corpus schema (existing DBs only; fresh DBs already get it from init_db.sql)
+cat scripts/migrate_corpus.sql | docker compose exec -T db psql postgresql://phs:phs@db:5432/phs
+#    b) fetch open-access papers from Europe PMC (data/corpus_topics.yml is the recipe).
+#       --slice N caps each pillar for a smoke test; drop it for the full ~4k run.
+docker compose exec api python scripts/fetch_corpus.py --slice 15
+#    c) extract → chunk/ingest → embed
 docker compose exec api python scripts/extract_text.py
 docker compose exec api python scripts/ingest.py
 docker compose exec api python scripts/embed_chunks.py
+#    d) build the ANN index once embeddings exist
+cat scripts/index_corpus.sql | docker compose exec -T db psql postgresql://phs:phs@db:5432/phs
 
 # 4. open the chat UI
 open http://localhost:8000

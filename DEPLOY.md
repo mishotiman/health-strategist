@@ -84,7 +84,12 @@ Get-Content scripts\migrate_workouts.sql -Raw | docker compose exec -T db psql "
 Get-Content scripts\migrate_auth.sql -Raw     | docker compose exec -T db psql "$url"
 Get-Content scripts\migrate_providers.sql -Raw | docker compose exec -T db psql "$url"
 Get-Content scripts\migrate_sync_time.sql -Raw | docker compose exec -T db psql "$url"
+Get-Content scripts\migrate_corpus.sql -Raw   | docker compose exec -T db psql "$url"
 ```
+
+> `migrate_corpus.sql` retypes `chunks.embedding` to 512 dims (voyage-3.5) and adds
+> the corpus metadata columns + the `source` dedup key. It nulls any existing
+> 1024-dim vectors, so re-embed (or re-seed) after running it.
 
 > Run these **in order**. `migrate_providers.sql` folds the old `whoop_connections`
 > table into `provider_connections` (one row per user *and provider*, so Garmin/Oura
@@ -116,6 +121,9 @@ docker compose exec -T db psql "$url" -c "SELECT setval('documents_id_seq',(SELE
 
 Same pattern for `users`, `profiles`, `health_metrics`. Alternative: point the
 ingestion scripts at the cloud `DATABASE_URL` and re-embed (costs Voyage calls).
+
+After seeding or re-embedding, build the ANN index once:
+`Get-Content scripts\index_corpus.sql -Raw | docker compose exec -T db psql "$url"`.
 
 ### Firewall
 
