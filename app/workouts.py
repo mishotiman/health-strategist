@@ -52,33 +52,37 @@ def offset_to_tz(offset: str | None):
 def upsert_workouts(user_id: int, source: str, rows: list[dict]) -> int:
     """Idempotently write workout events. Re-running with the same
     (user_id, source, external_id) updates the row instead of duplicating."""
-    written = 0
+    if not rows:
+        return 0
+    params = [
+        (user_id, source, r.get("external_id"), r.get("sport"),
+         r.get("workout_date"), r.get("start_time"), r.get("end_time"),
+         r.get("duration_min"), r.get("strain"), r.get("avg_hr"),
+         r.get("max_hr"), r.get("calories"), r.get("distance_m"),
+         r.get("tz_offset"))
+        for r in rows
+    ]
     with get_connection() as conn, conn.cursor() as cur:
-        for r in rows:
-            cur.execute(
-                """
-                INSERT INTO workouts
-                    (user_id, source, external_id, sport, workout_date, start_time,
-                     end_time, duration_min, strain, avg_hr, max_hr, calories,
-                     distance_m, tz_offset)
-                VALUES (%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s)
-                ON CONFLICT (user_id, source, external_id) DO UPDATE SET
-                    sport = EXCLUDED.sport, workout_date = EXCLUDED.workout_date,
-                    start_time = EXCLUDED.start_time, end_time = EXCLUDED.end_time,
-                    duration_min = EXCLUDED.duration_min, strain = EXCLUDED.strain,
-                    avg_hr = EXCLUDED.avg_hr, max_hr = EXCLUDED.max_hr,
-                    calories = EXCLUDED.calories, distance_m = EXCLUDED.distance_m,
-                    tz_offset = EXCLUDED.tz_offset
-                """,
-                (user_id, source, r.get("external_id"), r.get("sport"),
-                 r.get("workout_date"), r.get("start_time"), r.get("end_time"),
-                 r.get("duration_min"), r.get("strain"), r.get("avg_hr"),
-                 r.get("max_hr"), r.get("calories"), r.get("distance_m"),
-                 r.get("tz_offset")),
-            )
-            written += 1
+        # executemany pipelines the whole batch in one round-trip set
+        cur.executemany(
+            """
+            INSERT INTO workouts
+                (user_id, source, external_id, sport, workout_date, start_time,
+                 end_time, duration_min, strain, avg_hr, max_hr, calories,
+                 distance_m, tz_offset)
+            VALUES (%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s)
+            ON CONFLICT (user_id, source, external_id) DO UPDATE SET
+                sport = EXCLUDED.sport, workout_date = EXCLUDED.workout_date,
+                start_time = EXCLUDED.start_time, end_time = EXCLUDED.end_time,
+                duration_min = EXCLUDED.duration_min, strain = EXCLUDED.strain,
+                avg_hr = EXCLUDED.avg_hr, max_hr = EXCLUDED.max_hr,
+                calories = EXCLUDED.calories, distance_m = EXCLUDED.distance_m,
+                tz_offset = EXCLUDED.tz_offset
+            """,
+            params,
+        )
         conn.commit()
-    return written
+    return len(rows)
 
 
 def delete_workouts(user_id: int, source: str) -> int:

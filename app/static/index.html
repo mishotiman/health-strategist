@@ -281,6 +281,25 @@
   // (e.g. "~30 ng/mL"), and GFM would otherwise read a pair of tildes as
   // strikethrough and cross out the text between them. Tables/links unaffected.
   marked.use({ tokenizer: { del() {} } });
+  // Model output goes into innerHTML, so it must never carry live markup:
+  // marked passes raw HTML through untouched, and an answer that echoes
+  // user-pasted content could smuggle <script>/onerror handlers into the page.
+  // Escape raw HTML tokens (shown as literal text), allow only http(s) links
+  // (markdown can name a javascript: URL), and drop images entirely.
+  const escapeHtml = (s) => String(s).replace(/[&<>"']/g,
+    (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
+  marked.use({
+    renderer: {
+      html(html) { return escapeHtml(html); },
+      link(href, title, text) {
+        if (!/^https?:\/\//i.test(href || '')) return text;
+        const t = title ? ' title="' + escapeHtml(title) + '"' : '';
+        return '<a href="' + escapeHtml(href) + '"' + t +
+               ' target="_blank" rel="noopener noreferrer">' + text + '</a>';
+      },
+      image(href, title, text) { return escapeHtml(text || ''); },
+    },
+  });
 
   // ---- how fresh is the WHOOP data? ---------------------------------------
   // Rendered from the stored timestamp rather than a counter, so it stays right
@@ -356,7 +375,7 @@
     }
     if (!quiet) statusEl.textContent = 'Syncing WHOOP…';
     try {
-      const r = await fetch('/whoop/sync');
+      const r = await fetch('/whoop/sync', { method: 'POST' });
       const d = await r.json();
       if (d.metrics_written != null) {
         // a successful pull moves the freshness note, quiet run or not
@@ -658,7 +677,7 @@
       const s = document.createElement('div');
       s.className = 'sources';
       s.innerHTML = 'sources: ' + data.sources
-        .map(x => `<a href="${x.url}" target="_blank" rel="noopener">[${x.n}] ${x.title.slice(0,42)}${x.title.length>42?'…':''}</a>`)
+        .map(x => `<a href="${escapeHtml(x.url)}" target="_blank" rel="noopener">[${x.n}] ${escapeHtml(x.title.slice(0,42))}${x.title.length>42?'…':''}</a>`)
         .join(' · ');
       chat.appendChild(s);
     }

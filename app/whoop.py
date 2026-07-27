@@ -18,13 +18,13 @@ modelling here.
 from __future__ import annotations
 
 import datetime as dt
-import os
 import secrets
 from urllib.parse import urlencode
 
 import httpx
 
 from app import connections
+from app.config import settings
 from app.db import get_connection
 from app.ingestion import delete_metrics, upsert_metrics
 from app.workouts import delete_workouts, offset_to_tz, upsert_workouts
@@ -40,9 +40,9 @@ TOKEN_URL = "https://api.prod.whoop.com/oauth/oauth2/token"
 API_BASE = "https://api.prod.whoop.com/developer/v2"
 SCOPES = "offline read:recovery read:sleep read:cycles read:workout read:profile read:body_measurement"
 
-CLIENT_ID = os.environ.get("WHOOP_CLIENT_ID", "")
-CLIENT_SECRET = os.environ.get("WHOOP_CLIENT_SECRET", "")
-REDIRECT_URI = os.environ.get("WHOOP_REDIRECT_URI", "http://localhost:8000/whoop/callback")
+CLIENT_ID = settings.whoop_client_id
+CLIENT_SECRET = settings.whoop_client_secret
+REDIRECT_URI = settings.whoop_redirect_uri
 
 
 # --------------------------------------------------------------------------- #

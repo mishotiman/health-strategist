@@ -76,24 +76,25 @@ $url = "postgresql://phsadmin:<password>@phs-db-23f1hs.postgres.database.azure.c
 docker compose exec -T db psql "$url" -c "\dt"
 ```
 
-Schema (already applied; re-runnable — everything is `IF NOT EXISTS`):
+Schema — `scripts/migrate.py` applies every migration in the canonical order and
+records what it applied in a `schema_migrations` table, so it's safe to run on
+any database (fresh, local, or this one) and only does what's missing:
 
 ```powershell
-Get-Content scripts\init_db.sql -Raw          | docker compose exec -T db psql "$url"
-Get-Content scripts\migrate_features.sql -Raw | docker compose exec -T db psql "$url"
-Get-Content scripts\migrate_workouts.sql -Raw | docker compose exec -T db psql "$url"
-Get-Content scripts\migrate_auth.sql -Raw     | docker compose exec -T db psql "$url"
-Get-Content scripts\migrate_providers.sql -Raw | docker compose exec -T db psql "$url"
-Get-Content scripts\migrate_sync_time.sql -Raw | docker compose exec -T db psql "$url"
-Get-Content scripts\migrate_corpus.sql -Raw   | docker compose exec -T db psql "$url"
+$env:DATABASE_URL = $url
+python scripts\migrate.py            # or --dry-run to preview
 ```
+
+(The individual `migrate_*.sql` files are all idempotent, so piping one through
+psql by hand still works — but the runner is the canonical path; new migrations
+get appended to its `MIGRATIONS` list.)
 
 > `migrate_corpus.sql` retypes `chunks.embedding` to 512 dims (voyage-3.5) and adds
 > the corpus metadata columns + the `source` dedup key. It nulls any existing
 > 1024-dim vectors, so re-embed (or re-seed) after running it.
 
-> Run these **in order**. `migrate_providers.sql` folds the old `whoop_connections`
-> table into `provider_connections` (one row per user *and provider*, so Garmin/Oura
+> `migrate_providers.sql` folds the old `whoop_connections` table into
+> `provider_connections` (one row per user *and provider*, so Garmin/Oura
 > slot in without new tables), copying any existing connection across and then
 > dropping the old table. It's guarded, so re-running is a no-op.
 

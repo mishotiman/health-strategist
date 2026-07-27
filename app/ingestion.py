@@ -39,26 +39,28 @@ def upsert_metrics(user_id: int, source: str, records: list[dict]) -> int:
     Re-running with the same (user_id, source, date, metric_type) updates the
     row instead of inserting a duplicate.
     """
-    written = 0
+    if not records:
+        return 0
+    params = [
+        (user_id, source, r["date"], r["metric_type"], r.get("value"),
+         r.get("unit") or CANONICAL_UNITS.get(r["metric_type"]), r.get("text_value"))
+        for r in records
+    ]
     with get_connection() as conn, conn.cursor() as cur:
-        for r in records:
-            metric_type = r["metric_type"]
-            unit = r.get("unit") or CANONICAL_UNITS.get(metric_type)
-            cur.execute(
-                """
-                INSERT INTO health_metrics
-                    (user_id, source, metric_date, metric_type, value, unit, text_value)
-                VALUES (%s, %s, %s, %s, %s, %s, %s)
-                ON CONFLICT (user_id, source, metric_date, metric_type)
-                DO UPDATE SET value = EXCLUDED.value, unit = EXCLUDED.unit,
-                              text_value = EXCLUDED.text_value
-                """,
-                (user_id, source, r["date"], metric_type,
-                 r.get("value"), unit, r.get("text_value")),
-            )
-            written += 1
+        # executemany pipelines the whole batch in one round-trip set
+        cur.executemany(
+            """
+            INSERT INTO health_metrics
+                (user_id, source, metric_date, metric_type, value, unit, text_value)
+            VALUES (%s, %s, %s, %s, %s, %s, %s)
+            ON CONFLICT (user_id, source, metric_date, metric_type)
+            DO UPDATE SET value = EXCLUDED.value, unit = EXCLUDED.unit,
+                          text_value = EXCLUDED.text_value
+            """,
+            params,
+        )
         conn.commit()
-    return written
+    return len(records)
 
 
 def count_for_source(user_id: int, source: str) -> int:

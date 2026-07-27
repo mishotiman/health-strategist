@@ -12,25 +12,33 @@ restart merely resets short windows — an acceptable failure mode for abuse
 protection, unlike losing conversations (which is why chat state lives in
 Postgres and this doesn't).
 
-Budgets are env-overridable so production can be tuned without a deploy.
+Budgets come from app.config (RATE_* env vars) so production can be tuned
+without a deploy.
 """
 
 from __future__ import annotations
 
 import math
-import os
 import threading
 import time
 from collections import deque
 
 from fastapi import HTTPException
 
+from app.config import settings
+
 # (limit, window in seconds). Guests all share the demo account, so their chat
 # budget is keyed by client address and kept tighter than a signed-in user's.
-CHAT_USER = (int(os.environ.get("RATE_CHAT_USER", "20")), 5 * 60)
-CHAT_GUEST = (int(os.environ.get("RATE_CHAT_GUEST", "8")), 15 * 60)
-ASK_IP = (int(os.environ.get("RATE_ASK_IP", "10")), 5 * 60)      # smoke-eval sends 5
-SEARCH_IP = (int(os.environ.get("RATE_SEARCH_IP", "30")), 5 * 60)
+CHAT_USER = (settings.rate_chat_user, 5 * 60)
+CHAT_GUEST = (settings.rate_chat_guest, 15 * 60)
+ASK_IP = (settings.rate_ask_ip, 5 * 60)          # smoke-eval sends 5
+SEARCH_IP = (settings.rate_search_ip, 5 * 60)
+
+# Password-reset email budgets. These live here, NOT in login_attempts: counting
+# reset requests as failed logins let 8 of them lock an address out of login
+# for 15 minutes — a denial-of-service anyone could aim at any user.
+RESET_EMAIL = (3, 60 * 60)   # per target address: an attacker can't drown an inbox
+RESET_IP = (10, 60 * 60)     # per requester address
 
 # Keys whose newest hit is older than this are dropped wholesale during pruning.
 # Kept >= the longest window above so pruning can never forget live counts.
@@ -75,6 +83,14 @@ class SlidingWindowLimiter:
 
 
 _limiter = SlidingWindowLimiter()
+
+
+def allow(key: str, budget: tuple[int, float]) -> bool:
+    """Like enforce(), but reports the verdict instead of raising — for flows
+    that must respond identically either way (e.g. forgot-password, where a 429
+    would leak how often an address is being asked about)."""
+    limit, window_s = budget
+    return _limiter.try_acquire(key, limit, window_s) is None
 
 
 def enforce(key: str, budget: tuple[int, float], what: str = "requests") -> None:

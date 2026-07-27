@@ -18,7 +18,6 @@ from __future__ import annotations
 
 import base64
 import hashlib
-import os
 import secrets
 import time
 from urllib.parse import urlencode
@@ -26,26 +25,26 @@ from urllib.parse import urlencode
 import httpx
 from authlib.jose import JsonWebKey, jwt
 
+from app.config import settings
 from app.db import get_connection
 
-APP_BASE_URL = os.environ.get("APP_BASE_URL", "http://localhost:8000").rstrip("/")
+APP_BASE_URL = settings.app_base_url
 
-# "common" lets both personal and work/school Microsoft accounts sign in.
-_MS_TENANT = os.environ.get("MICROSOFT_TENANT", "common")
+_MS_TENANT = settings.microsoft_tenant
 
 PROVIDERS: dict[str, dict] = {
     "google": {
         "label": "Google",
         "discovery": "https://accounts.google.com/.well-known/openid-configuration",
-        "client_id": os.environ.get("GOOGLE_CLIENT_ID", ""),
-        "client_secret": os.environ.get("GOOGLE_CLIENT_SECRET", ""),
+        "client_id": settings.google_client_id,
+        "client_secret": settings.google_client_secret,
     },
     "microsoft": {
         "label": "Microsoft",
         "discovery": (f"https://login.microsoftonline.com/{_MS_TENANT}"
                       "/v2.0/.well-known/openid-configuration"),
-        "client_id": os.environ.get("MICROSOFT_CLIENT_ID", ""),
-        "client_secret": os.environ.get("MICROSOFT_CLIENT_SECRET", ""),
+        "client_id": settings.microsoft_client_id,
+        "client_secret": settings.microsoft_client_secret,
     },
 }
 

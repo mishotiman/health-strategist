@@ -45,7 +45,7 @@ from app.workouts import query_workouts
 
 # Opus is the flagship agent. Override with AGENT_MODEL (e.g. claude-haiku-4-5)
 # for cheap smoke runs of the agent eval.
-MODEL = os.environ.get("AGENT_MODEL", "claude-opus-4-8")
+MODEL = settings.agent_model
 
 SYSTEM_PROMPT = f"""You are the user's AI Personal Health Strategist. You turn their \
 own body data plus peer-reviewed sports-science research into practical, \
@@ -106,6 +106,13 @@ def _fmt_hours(value: float) -> str:
     return f"{h}h {m}m" if h and m else (f"{h}h" if h else f"{m}m")
 
 
+def _configurable(config: RunnableConfig | None) -> dict:
+    """The `configurable` dict of a tool's config — the one access pattern every
+    tool below uses. run()/stream_run() always populate it; the fallback covers
+    a tool invoked bare (tests, ad-hoc eval probes)."""
+    return (config or {}).get("configurable") or {}
+
+
 @tool
 def knowledge_search(query: str, config: RunnableConfig = None) -> str:
     """Search the peer-reviewed sports-science research corpus. Use for any claim
@@ -118,7 +125,7 @@ def knowledge_search(query: str, config: RunnableConfig = None) -> str:
 
     # A per-turn registry (shared via config) gives each unique source a stable
     # global citation number, so [n] means the same paper across the whole turn.
-    reg = ((config or {}).get("configurable") or {}).get("citations")
+    reg = _configurable(config).get("citations")
     if reg is None:
         reg = []
     return format_chunks_with_citations(chunks, reg)
@@ -136,7 +143,7 @@ def health_data(metric_type: str = "", config: RunnableConfig = None) -> str:
     Some results are qualitative (microbiology like clostridium_difficile_*,
     quantiferon_tb) — those carry a text_value ("negative"/"positive") instead of
     a numeric value. Pass a metric_type to filter, or leave empty for all recent."""
-    user_id = config["configurable"]["user_id"]
+    user_id = _configurable(config)["user_id"]
     rows = query_metrics(user_id, metric_type or None, limit=40)
     for r in rows:  # give the model a ready-made "6h 44m" for hour-based metrics
         if r.get("unit") == "h" and r.get("value") is not None:
@@ -152,7 +159,7 @@ def workouts(config: RunnableConfig = None) -> str:
     distance_m (cardio only). Use for any question about the user's actual
     training — what they did, how hard, how long, how far, and trends across
     sessions. This is the training log; health_data holds daily recovery/sleep."""
-    user_id = config["configurable"]["user_id"]
+    user_id = _configurable(config)["user_id"]
     rows = query_workouts(user_id, limit=25)
     return json.dumps(rows, default=str) if rows else "No workouts on record."
 
@@ -161,7 +168,7 @@ def workouts(config: RunnableConfig = None) -> str:
 def memory(config: RunnableConfig = None) -> str:
     """Read the user's profile: goals, sex, birth year, height, weight, and
     injuries. Use to tailor advice to who they are and what they want."""
-    user_id = config["configurable"]["user_id"]
+    user_id = _configurable(config)["user_id"]
     with get_connection() as conn, conn.cursor() as cur:
         cur.execute(
             "SELECT goals, sex, birth_year, height_cm, weight_kg, injuries "

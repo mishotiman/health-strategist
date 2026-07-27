@@ -12,12 +12,13 @@ logged instead, so the whole verify/reset flow is still walkable offline.
 from __future__ import annotations
 
 import logging
-import os
+
+from app.config import settings
 
 log = logging.getLogger(__name__)
 
-RESEND_API_KEY = os.environ.get("RESEND_API_KEY", "")
-EMAIL_FROM = os.environ.get("EMAIL_FROM", "Personal Health Strategist <onboarding@resend.dev>")
+RESEND_API_KEY = settings.resend_api_key
+EMAIL_FROM = settings.email_from
 
 
 def send(to: str, subject: str, html: str, link: str | None = None) -> bool:

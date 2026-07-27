@@ -3,10 +3,9 @@ harness, so they exercise exactly the same retrieval + generation path."""
 
 from __future__ import annotations
 
-import os
-
 import anthropic
 
+from app.config import settings
 from app.llm_cache import complete_text
 from app.prompts import GUARDRAILS
 from app.rag import retrieve
@@ -14,8 +13,8 @@ from app.rag import retrieve
 _claude = anthropic.Anthropic()  # reads ANTHROPIC_API_KEY
 
 # Sonnet by default: near-Opus quality on grounded Q&A at ~1/2 the cost. The
-# flagship agent (/chat) stays on Opus; override here with RAG_GEN_MODEL.
-GEN_MODEL = os.environ.get("RAG_GEN_MODEL", "claude-sonnet-5")
+# flagship agent (/chat) stays on Opus; override with RAG_GEN_MODEL.
+GEN_MODEL = settings.rag_gen_model
 
 SYSTEM_PROMPT = f"""You are a science-grounded health strategist.
 

@@ -1,20 +1,19 @@
 """Retrieval: embed a question and find the closest chunks in pgvector.
 
 This is the shared retrieval layer used by both /search (retrieval only) and
-/ask (retrieval + generation). A new DB connection per call is fine at this
-scale; we'll pool later if it matters.
+/ask (retrieval + generation). Connections come from the shared pool in
+app.db — this module used to read its own DATABASE_URL, a second source of
+truth that could silently drift from app.config.
 """
 
 from __future__ import annotations
 
 import os
 
-import psycopg
 import voyageai
 
 from app.config import settings
-
-DATABASE_URL = os.environ.get("DATABASE_URL", "postgresql://phs:phs@db:5432/phs")
+from app.db import get_connection
 
 # Optional HNSW recall knob (higher = better recall, slower). Unset -> pgvector's
 # default. Worth setting once the ANN index exists (scripts/index_corpus.sql).
@@ -40,7 +39,7 @@ def retrieve(question: str, k: int = 6, fetch_k: int | None = None) -> list[dict
     """
     fetch_k = fetch_k or k
     qvec = str(embed_query(question))  # pgvector accepts the '[...]' text form
-    with psycopg.connect(DATABASE_URL) as conn, conn.cursor() as cur:
+    with get_connection() as conn, conn.cursor() as cur:
         if _EF_SEARCH:  # int() guards the interpolation (SET rejects bound params)
             cur.execute(f"SET LOCAL hnsw.ef_search = {int(_EF_SEARCH)}")
         cur.execute(
