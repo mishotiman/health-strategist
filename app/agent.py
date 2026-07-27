@@ -26,7 +26,7 @@ if os.environ.get("LANGSMITH_API_KEY"):
     os.environ.setdefault("LANGSMITH_TRACING", "true")
 
 from langchain.agents import create_agent
-from langchain.agents.middleware import dynamic_prompt
+from langchain.agents.middleware import dynamic_prompt, wrap_model_call
 from langchain_anthropic import ChatAnthropic
 from langchain_core.messages import AIMessageChunk, HumanMessage
 from langchain_core.runnables import RunnableConfig
@@ -97,6 +97,59 @@ def _prompt_with_today(request) -> str:
         "WHOOP data can lag today by a day or two, so do not assume the latest "
         "logged entry is from today."
     )
+
+
+# --------------------------------------------------------------------------- #
+# Prompt caching
+# --------------------------------------------------------------------------- #
+# Each chat turn makes several LLM calls (decide-a-tool → read result → …
+# → write the answer), and each re-sends the whole prefix: tool schemas, the
+# system prompt, and every prior message. Caching lets calls after the first
+# re-read that prefix at ~10% of the input price instead of paying full price
+# each time — the single biggest lever on /chat cost.
+#
+# Mechanism: a `cache_control` breakpoint on a content block caches everything
+# before it (render order is tools → system → messages). We put the breakpoint
+# on the LAST message, so the cached unit is the entire prefix. Two facts drive
+# that placement:
+#   * Anthropic only caches a prefix of >= 1024 tokens (4096 on Opus 4.8), and
+#     tools + system here is only ~1.7k — under Opus's floor, so a system-only
+#     breakpoint would silently never cache. The win has to come from prefixes
+#     large enough to matter (retrieved passages, metrics, longer threads) —
+#     exactly the expensive turns; small turns just skip caching at no cost.
+#   * A *top-level* `cache_control` request param (Anthropic's "automatic"
+#     caching) was measured to no-op through this LangChain→SDK stack, so we
+#     place the block-level breakpoint ourselves.
+# The breakpoint is added only to the copy sent to the model; the checkpointer
+# still stores clean messages (no cache_control persisted into thread state).
+_EPHEMERAL = {"cache_control": {"type": "ephemeral"}}
+
+
+def _with_cache_breakpoint(message):
+    """A copy of `message` with a cache breakpoint on its last content block.
+    Leaves the original (checkpointed) message untouched."""
+    content = message.content
+    if isinstance(content, str):
+        new_content = [{"type": "text", "text": content, **_EPHEMERAL}]
+    elif isinstance(content, list) and content:
+        new_content = list(content)
+        last = new_content[-1]
+        new_content[-1] = ({**last, **_EPHEMERAL} if isinstance(last, dict)
+                           else {"type": "text", "text": str(last), **_EPHEMERAL})
+    else:
+        return message  # nothing to attach a breakpoint to
+    return message.model_copy(update={"content": new_content})
+
+
+@wrap_model_call
+def _cache_prefix(request, handler):
+    """Cache the request prefix (tools + system + prior turns) by putting the
+    breakpoint on the last message before each model call."""
+    messages = request.messages
+    if messages:
+        request = request.override(
+            messages=[*messages[:-1], _with_cache_breakpoint(messages[-1])])
+    return handler(request)
 
 
 def _fmt_hours(value: float) -> str:
@@ -207,7 +260,7 @@ def _build_agent():
     return create_agent(
         _llm,
         tools=[knowledge_search, health_data, workouts, memory],
-        middleware=[_prompt_with_today],
+        middleware=[_prompt_with_today, _cache_prefix],
         checkpointer=checkpointer,
     )
 
