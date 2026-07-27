@@ -17,6 +17,7 @@ from __future__ import annotations
 import datetime as dt
 import json
 import os
+import threading
 
 # Trace agent trajectories to LangSmith (EU workspace).
 os.environ.setdefault("LANGSMITH_ENDPOINT", "https://eu.api.smith.langchain.com")
@@ -24,14 +25,18 @@ os.environ.setdefault("LANGCHAIN_ENDPOINT", os.environ["LANGSMITH_ENDPOINT"])
 if os.environ.get("LANGSMITH_API_KEY"):
     os.environ.setdefault("LANGSMITH_TRACING", "true")
 
+from langchain.agents import create_agent
+from langchain.agents.middleware import dynamic_prompt
 from langchain_anthropic import ChatAnthropic
-from langchain_core.messages import AIMessageChunk, HumanMessage, SystemMessage
+from langchain_core.messages import AIMessageChunk, HumanMessage
 from langchain_core.runnables import RunnableConfig
 from langchain_core.tools import tool
-from langgraph.checkpoint.memory import MemorySaver
-from langgraph.prebuilt import create_react_agent
+from langgraph.checkpoint.postgres import PostgresSaver
+from psycopg.rows import dict_row
+from psycopg_pool import ConnectionPool
 
 from app.citations import format_chunks_with_citations
+from app.config import settings
 from app.db import get_connection
 from app.ingestion import query_metrics
 from app.prompts import GUARDRAILS
@@ -77,20 +82,21 @@ in the research corpus, for the user to try right away.
 Be concise, practical, and honest about uncertainty."""
 
 
-def _prompt_with_today(state) -> list:
-    """The system prompt with today's date stamped on, recomputed every call so
-    the agent never has to guess 'today' / 'yesterday' / 'this week'. Returned
-    fresh each turn (not persisted into thread state). Uses the server's local
-    date; swap in the user's timezone if near-midnight precision ever matters."""
+@dynamic_prompt
+def _prompt_with_today(request) -> str:
+    """The system prompt with today's date stamped on, recomputed every model
+    call so the agent never has to guess 'today' / 'yesterday' / 'this week'.
+    Uses the server's local date; swap in the user's timezone if near-midnight
+    precision ever matters. (A create_agent middleware — the LangGraph v1
+    replacement for the old `prompt` callable.)"""
     today = dt.date.today()
-    dated = (
+    return (
         f"{SYSTEM_PROMPT}\n\n"
         f"Today's date is {today.isoformat()} ({today.strftime('%A')}). Use it "
         "for any date reasoning; never guess the date. The user's most recent "
         "WHOOP data can lag today by a day or two, so do not assume the latest "
         "logged entry is from today."
     )
-    return [SystemMessage(content=dated)] + state["messages"]
 
 
 def _fmt_hours(value: float) -> str:
@@ -170,13 +176,42 @@ def memory(config: RunnableConfig = None) -> str:
 
 
 _llm = ChatAnthropic(model=MODEL, max_tokens=2000)
-_checkpointer = MemorySaver() # persist conversation state per thread in RAM, so the agent remembers earlier turns
-_agent = create_react_agent(
-    _llm,
-    tools=[knowledge_search, health_data, workouts, memory],
-    prompt=_prompt_with_today,
-    checkpointer=_checkpointer,
-)
+
+# Built lazily on first use (not at import): eval scripts and offline tests
+# import this module without a database, and a transiently unreachable DB at
+# boot self-heals on the next request instead of crashing the process.
+_agent = None
+_agent_lock = threading.Lock()
+
+
+def _build_agent():
+    """Conversation state lives in Postgres (the same DB as everything else), so
+    threads survive restarts and scale-to-zero, and any replica sees them.
+    (MemorySaver, the previous checkpointer, kept them in process RAM: every
+    deploy or scale-down wiped every user's conversation.)"""
+    pool = ConnectionPool(
+        conninfo=settings.database_url,
+        min_size=1, max_size=4,
+        # PostgresSaver requires autocommit + dict rows on its connections.
+        kwargs={"autocommit": True, "row_factory": dict_row},
+    )
+    checkpointer = PostgresSaver(pool)
+    checkpointer.setup()  # creates its checkpoint tables; no-op when they exist
+    return create_agent(
+        _llm,
+        tools=[knowledge_search, health_data, workouts, memory],
+        middleware=[_prompt_with_today],
+        checkpointer=checkpointer,
+    )
+
+
+def _get_agent():
+    global _agent
+    if _agent is None:
+        with _agent_lock:
+            if _agent is None:
+                _agent = _build_agent()
+    return _agent
 
 
 def _text(content) -> str:
@@ -190,7 +225,7 @@ def run(user_id: int, message: str, thread_id: str | None = None) -> dict:
     citations: list[dict] = []  # filled by knowledge_search during this turn
     config = {"configurable": {"user_id": user_id, "thread_id": thread_id,
                                "citations": citations}}
-    result = _agent.invoke({"messages": [HumanMessage(content=message)]}, config=config)
+    result = _get_agent().invoke({"messages": [HumanMessage(content=message)]}, config=config)
 
     messages = result["messages"]
     tools_used = [
@@ -226,7 +261,7 @@ def stream_run(user_id: int, message: str, thread_id: str | None = None):
     tools_seen: set[str] = set()
     final_answer = ""
 
-    for mode, chunk in _agent.stream(
+    for mode, chunk in _get_agent().stream(
             {"messages": [HumanMessage(content=message)]},
             config=config, stream_mode=["updates", "messages"]):
         if mode == "messages":

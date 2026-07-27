@@ -1,34 +1,42 @@
+# Pinned to the exact versions the app is developed and tested against, so every
+# image build installs the same code. (Unpinned, a routine deploy broke when
+# langgraph v1 removed create_react_agent.) To upgrade: bump a pin, run the test
+# suite + evals, commit the new pin.
+
 # Web
-fastapi
-uvicorn[standard]
-pydantic-settings
-python-multipart  # FastAPI file uploads
+fastapi==0.139.2
+uvicorn[standard]==0.51.0
+pydantic-settings==2.14.2
+python-multipart==0.0.32  # FastAPI file uploads
 
 # Database
-psycopg[binary]
-pgvector
+psycopg[binary]==3.3.4
+psycopg-pool==3.3.1  # shared connection pool (agent checkpointer)
+pgvector==0.5.0
 
 # LLM + embeddings (used from Week 1 Wed onward)
-anthropic
-voyageai
-openai  # fallback embeddings provider
-tenacity  # retry/backoff for bulk embedding + Europe PMC fetch
+anthropic==0.117.0
+voyageai==0.5.0
+openai==2.46.0  # fallback embeddings provider
+tenacity==9.1.4  # retry/backoff for bulk embedding + Europe PMC fetch
 
 # PDF / ingestion (used from Week 1 Tue onward)
-pymupdf
-pyyaml  # data/corpus_topics.yml — the corpus acquisition recipe
+pymupdf==1.28.0
+pyyaml==6.0.3  # data/corpus_topics.yml — the corpus acquisition recipe
 
 # Eval harness (Week 2)
-langsmith
+langsmith==0.10.6
 
 # Agent (Week 4)
-langgraph
-langchain-anthropic
+langgraph==1.2.9
+langchain==1.3.14    # create_agent — LangGraph v1 replacement for create_react_agent
+langchain-anthropic==1.4.8
+langgraph-checkpoint-postgres==3.1.0  # durable conversation state (replaces MemorySaver)
 
 # Auth: accounts, external sign-in, transactional email
-argon2-cffi          # argon2id password hashing
-authlib              # Google/Microsoft OIDC (discovery, JWKS, PKCE, nonce)
-resend               # verification + password-reset email
+argon2-cffi==25.1.0  # argon2id password hashing
+authlib==1.7.2       # Google/Microsoft OIDC (discovery, JWKS, PKCE, nonce)
+resend==2.34.0       # verification + password-reset email
 
 # Tests
-pytest
+pytest==9.1.1

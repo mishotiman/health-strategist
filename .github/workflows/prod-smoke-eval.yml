@@ -1,0 +1,41 @@
+name: Production smoke-eval
+
+# Black-box quality check against the DEPLOYED app (scripts/prod_smoke_eval.py).
+# The daily run is the free tier — liveness + retrieval — and needs no secrets.
+# The /ask answer tier is opt-in via a manual run; it uses the deployed app's
+# own Anthropic key server-side, so this workflow never holds any credentials.
+
+on:
+  schedule:
+    - cron: "17 6 * * *"        # daily 06:17 UTC (off-hour; GitHub throttles :00)
+  workflow_dispatch:
+    inputs:
+      with_answers:
+        description: "Also grade /ask answers (spends on the deployed Anthropic key)"
+        type: boolean
+        default: false
+
+permissions:
+  contents: read
+
+# Never let two runs overlap, but don't cancel an in-flight one either.
+concurrency:
+  group: prod-smoke-eval
+  cancel-in-progress: false
+
+jobs:
+  smoke:
+    runs-on: ubuntu-latest
+    env:
+      # Override by setting an APP_BASE_URL repository variable; otherwise the
+      # live URL below (also the script's built-in default) is used.
+      APP_BASE_URL: ${{ vars.APP_BASE_URL || 'https://phs-api.orangehill-97462476.polandcentral.azurecontainerapps.io' }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      # No `pip install`: the script is standard-library only by design.
+      - name: Smoke-eval the deployed app
+        run: |
+          python scripts/prod_smoke_eval.py ${{ (github.event_name == 'workflow_dispatch' && inputs.with_answers) && '--with-answers' || '' }}

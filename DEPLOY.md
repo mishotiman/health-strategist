@@ -12,6 +12,7 @@ Poland Central) so it can be torn down with a single command.
 | Container Registry (Basic) | `phsacr23f1hs` | Stores the app image | ~$5/mo |
 | Container Apps environment | `phs-env` | Networking/logging boundary | free |
 | Container App | `phs-api` | The running app + public HTTPS URL | ~free (scales to zero) |
+| Log Analytics workspace | `phs-logs` | Container logs (queryable via KQL) | ~free (5 GB/mo free tier) |
 
 Live URL: `https://phs-api.orangehill-97462476.polandcentral.azurecontainerapps.io`
 
@@ -164,6 +165,65 @@ az group delete --name phs-rg --yes --no-wait
 ```
 
 ACR Basic (~$5/mo) has no stop — only delete.
+
+## Observability (logs + a production canary)
+
+Lightweight "MLOps-lite": you can see what the deployed app is doing, and a
+scheduled job tells you if production quality regresses.
+
+### Container logs → Log Analytics
+
+The Container Apps environment was created without a log destination, so
+`stdout`/`stderr` went nowhere. It now streams to a Log Analytics workspace.
+How it was wired (idempotent — safe to re-run for a fresh environment):
+
+```powershell
+# 1. a workspace to hold the logs (PerGB2018; 5 GB/mo is free)
+az monitor log-analytics workspace create -g phs-rg -n phs-logs `
+  --location polandcentral --retention-time 30
+
+# 2. point the Container Apps environment at it (in-place; no recreate needed)
+$wsId  = az monitor log-analytics workspace show        -g phs-rg -n phs-logs --query customerId -o tsv
+$wsKey = az monitor log-analytics workspace get-shared-keys -g phs-rg -n phs-logs --query primarySharedKey -o tsv
+az containerapp env update -g phs-rg -n phs-env `
+  --logs-destination log-analytics --logs-workspace-id $wsId --logs-workspace-key $wsKey
+```
+
+Logs begin flowing within a few minutes (the tables appear on first ingestion).
+Query them with KQL — `az monitor log-analytics query` needs the workspace's
+**GUID** (`customerId`), not its name:
+
+```powershell
+$wsId = az monitor log-analytics workspace show -g phs-rg -n phs-logs --query customerId -o tsv
+
+# recent app console output (your uvicorn / print logs)
+az monitor log-analytics query -w $wsId --analytics-query `
+  "ContainerAppConsoleLogs_CL | where ContainerAppName_s == 'phs-api' | project TimeGenerated, Log_s | order by TimeGenerated desc | take 50" -o table
+
+# platform/system events (restarts, scaling, image pulls)
+az monitor log-analytics query -w $wsId --analytics-query `
+  "ContainerAppSystemLogs_CL | where ContainerAppName_s == 'phs-api' | project TimeGenerated, Reason_s, Log_s | order by TimeGenerated desc | take 50" -o table
+```
+
+For an ad-hoc live tail without KQL, `az containerapp logs show -g phs-rg -n phs-api --follow` still works.
+
+### Scheduled production smoke-eval
+
+`scripts/prod_smoke_eval.py` grades the **deployed** app over HTTP — the
+black-box complement to the local LangSmith golden-set harness. It's standard-
+library only (no deps, no `app` imports), so it runs on a bare runner:
+
+```powershell
+python scripts/prod_smoke_eval.py                  # free: liveness + retrieval recall
+python scripts/prod_smoke_eval.py --with-answers   # + /ask citation-validity (Anthropic spend)
+```
+
+`.github/workflows/prod-smoke-eval.yml` runs the **free tier daily** (06:17 UTC)
+and turns the build red if the app is down or retrieval breaks. It holds **no
+secrets** — the answer tier, when triggered manually via *Run workflow →
+with_answers*, uses the deployed app's own Anthropic key server-side. If ingress
+is ever IP-restricted (see Security notes), allow GitHub's runners or the job
+can't reach the app. Point it elsewhere with an `APP_BASE_URL` repo variable.
 
 ## Accounts & auth
 

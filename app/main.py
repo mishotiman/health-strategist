@@ -29,7 +29,7 @@ from pydantic import BaseModel
 log = logging.getLogger(__name__)
 
 from app import (agent, auth, bloodwork, connections, emailer, oidc,
-                 session as sess, whoop)
+                 ratelimit, session as sess, whoop)
 from app.db import get_connection
 from app.ingestion import count_for_source as ingestion_count
 from app.ingestion import query_metrics, upsert_metrics
@@ -96,6 +96,32 @@ def readable_user(p: Principal = Depends(current_principal)) -> int:
     guests. Anonymous callers are still rejected."""
     if p.user_id is None:
         raise HTTPException(status_code=401, detail="Login required.")
+    return p.user_id
+
+
+def _client_ip(request: Request) -> str:
+    """The caller's address, for per-IP rate limiting. Behind the Azure ingress
+    the socket peer is the proxy, which appends the real client to
+    X-Forwarded-For — the LAST entry is the one our proxy wrote (earlier ones
+    are client-supplied and spoofable). No header (local dev) -> the socket."""
+    fwd = request.headers.get("x-forwarded-for")
+    if fwd:
+        return fwd.split(",")[-1].strip()
+    return request.client.host if request.client else "unknown"
+
+
+def chat_user(request: Request, p: Principal = Depends(current_principal)) -> int:
+    """readable_user plus a spend guard for the agent endpoints — every /chat
+    turn runs the Opus agent on the app's own key. Signed-in users get a
+    per-account budget; guests (who all share the demo account and cost nothing
+    to become) get a tighter one keyed by client address."""
+    if p.user_id is None:
+        raise HTTPException(status_code=401, detail="Login required.")
+    if p.is_user:
+        ratelimit.enforce(f"chat:user:{p.user_id}", ratelimit.CHAT_USER, "messages")
+    else:
+        ratelimit.enforce(f"chat:guest:{_client_ip(request)}",
+                          ratelimit.CHAT_GUEST, "messages")
     return p.user_id
 
 
@@ -501,8 +527,11 @@ def update_profile(req: ProfileRequest, user_id: int = Depends(require_user)):
 
 
 # ---- RAG -------------------------------------------------------------------
+# /search and /ask stay public (the smoke-eval and pre-login demo depend on
+# that) but are rate-limited per IP: both spend on the app's own API keys.
 @app.post("/search")
-def search(req: AskRequest):
+def search(req: AskRequest, request: Request):
+    ratelimit.enforce(f"search:{_client_ip(request)}", ratelimit.SEARCH_IP, "searches")
     chunks = retrieve(req.question, req.k)
     return {
         "question": req.question,
@@ -520,7 +549,8 @@ def search(req: AskRequest):
 
 
 @app.post("/ask")
-def ask(req: AskRequest):
+def ask(req: AskRequest, request: Request):
+    ratelimit.enforce(f"ask:{_client_ip(request)}", ratelimit.ASK_IP, "questions")
     result = answer_question(req.question, req.k)
     sources = [
         {"n": i + 1, "title": c["title"], "authors": c["authors"],
@@ -658,7 +688,7 @@ def delete_bloodwork_document(doc_id: int, user_id: int = Depends(require_user))
 
 # ---- agent -----------------------------------------------------------------
 @app.post("/chat")
-def chat(req: ChatRequest, user_id: int = Depends(readable_user)):
+def chat(req: ChatRequest, user_id: int = Depends(chat_user)):
     """Talk to the health-strategist agent as the logged-in user (or demo user).
     The thread is namespaced per user so demo and real memory never mix.
     Non-streaming; kept as a fallback for /chat/stream."""
@@ -667,7 +697,7 @@ def chat(req: ChatRequest, user_id: int = Depends(readable_user)):
 
 
 @app.post("/chat/stream")
-def chat_stream(req: ChatRequest, user_id: int = Depends(readable_user)):
+def chat_stream(req: ChatRequest, user_id: int = Depends(chat_user)):
     """The streaming counterpart to /chat: newline-delimited JSON events
     (token…token…done) so the UI can reveal the answer as it's written. Sync
     generator — FastAPI runs it in a worker thread, and the whole agent stack

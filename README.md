@@ -118,6 +118,12 @@ server-side and revocable. Anyone can also pick **"Try Health Strategist now"** 
 session that reads a sample dataset and saves nothing. Every write endpoint derives the user
 from the session, and WHOOP is connected per-account.
 
+**Observability.** Container logs stream to a Log Analytics workspace (queryable via KQL),
+and a scheduled GitHub Action (`scripts/prod_smoke_eval.py`) runs a daily black-box
+smoke-eval against the live app — liveness, retrieval recall, and (on demand) `/ask`
+citation validity — so the "measured quality" story extends past the local golden sets to
+*production*. Details in [DEPLOY.md](DEPLOY.md#observability-logs--a-production-canary).
+
 ## Quickstart
 
 ```bash
