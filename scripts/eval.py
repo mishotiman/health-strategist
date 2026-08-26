@@ -11,6 +11,10 @@ and scores each answer with four transparent evaluators:
   correctness       (LLM judge)     — does the answer convey the expected facts /
                                       refuse or defer appropriately?
 
+Both LLM judges reason before ruling, and that reasoning is attached to the
+score as the evaluator's comment — so a failing case explains itself in the
+trace instead of being a bare 0.
+
 Results land in the LangSmith dashboard (URL printed at the end).
 """
 
@@ -135,28 +139,92 @@ def citation_validity(outputs: dict, reference_outputs: dict):
     return {"key": "citation_validity", "score": 1.0 if ok else 0.0}
 
 
-def _judge_binary(prompt: str) -> float:
+# The judges reason before they rule, and that reasoning is returned as the
+# evaluator's `comment` so it lands in the LangSmith trace next to the score.
+# The previous design asked for a bare digit (max_tokens=8), which told us THAT
+# a case failed but never why — so a low aggregate was impossible to act on
+# without re-deriving every judgement by hand. Mirrors the agent harness's judge
+# (scripts/eval_agent.py), which already worked this way.
+_VERDICT_INSTRUCTION = (
+    "Work through the claims, then finish with a line of exactly "
+    "'VERDICT: 1' or 'VERDICT: 0'. That line is mandatory and must be last — "
+    "an answer without it cannot be scored."
+)
+
+
+def _judge_reasoned(prompt: str) -> tuple[float | None, str]:
+    """Run a judge prompt; return (score, the judge's stated reasoning).
+
+    `score` is None when the judge produced no VERDICT line — in practice that
+    means its reply was cut off mid-reasoning. Returning None records the case
+    as UNSCORED (main() skips it and `n` drops) rather than inventing a verdict.
+
+    An earlier version scavenged the last 0/1 digit from the text as a fallback.
+    Against reasoning dense with "[1]", "20%" and "1992" that silently assigned
+    near-random scores to every truncated reply — far worse than a visible gap.
+    max_tokens is sized for the claim-by-claim enumeration the faithfulness
+    judge naturally writes: at 256 it truncated 18 of 31 cases, at 1024 it
+    still dropped 5 — and the drops are not random, since the answers with
+    the most claims produce the longest reasoning AND are the likeliest to
+    contain an unsupported one, which biases the surviving mean upward.
+    """
     text = complete_text(
         judge,
         model=JUDGE_MODEL,
-        max_tokens=8,
-        messages=[{"role": "user", "content": prompt}],
+        max_tokens=2048,
+        messages=[{"role": "user", "content": f"{prompt}\n\n{_VERDICT_INSTRUCTION}"}],
     )
-    match = re.search(r"[01]", text)
-    return float(match.group()) if match else 0.0
+    m = re.search(r"VERDICT:\s*([01])", text)
+    reasoning = re.sub(r"VERDICT:\s*[01]\s*$", "", text).strip()
+    if not m:
+        return None, f"[UNSCORED — no VERDICT line; reply likely truncated]\n{reasoning}"
+    return float(m.group(1)), reasoning
+
+
+_FAITHFULNESS_RUBRIC = """You are grading whether an answer is GROUNDED in the \
+passages it was given.
+
+Grounded means every factual claim traces back to the PASSAGES. Judge grounding
+ONLY — not whether the answer is the best possible one, and not whether some
+other paper would have been a better source. The passages shown are the only
+evidence that existed for this answer.
+
+Score 1 when:
+- Every factual claim is supported by the passages, even if paraphrased.
+- The answer states that the passages don't cover the question.
+- The answer hedges, defers to a clinician, or gives generic safety framing —
+  those are not factual claims about the evidence.
+
+Score 0 when:
+- The answer states a fact, number, or dosage that appears in no passage.
+- The answer contradicts a passage.
+- The answer attributes a claim to a passage that does not make it.
+
+Examples:
+PASSAGE: creatine monohydrate is safe in healthy adults.
+ANSWER: "Creatine monohydrate is well tolerated in healthy adults [1]." -> VERDICT: 1
+PASSAGE: creatine is safe; says nothing about dosing.
+ANSWER: "Creatine is safe [1]; take 5 g daily." -> VERDICT: 0
+PASSAGES: cover sleep only.
+ANSWER: "These passages don't address beta-alanine, so I can't say." -> VERDICT: 1"""
 
 
 def faithfulness(outputs: dict):
+    """Is every claim in the answer supported by the passages actually retrieved?
+
+    Deliberately does NOT take `reference_outputs`: grounding is measured against
+    the evidence the generator saw, not against the golden set's preferred paper.
+    An answer built from a different-but-equally-valid paper is fully grounded and
+    must not be penalised here — judging retrieval is recall@k's job, and that is
+    the only metric `expected_source` feeds.
+    """
     prompt = (
-        "You are grading whether an answer is grounded in the given passages.\n\n"
+        f"{_FAITHFULNESS_RUBRIC}\n\n"
         f"PASSAGES:\n{outputs['context']}\n\n"
-        f"ANSWER:\n{outputs['answer']}\n\n"
-        "Is every factual claim in the ANSWER supported by the PASSAGES "
-        "(a statement that the passages don't cover a topic counts as supported)? "
-        "Reply with a single digit: 1 if fully grounded with no unsupported claims, "
-        "0 if it contains any unsupported or hallucinated claim."
+        f"ANSWER:\n{outputs['answer']}"
     )
-    return {"key": "faithfulness", "score": _judge_binary(prompt)}
+    score, reasoning = _judge_reasoned(prompt)
+    return {"key": "faithfulness", "score": score, "comment": reasoning}
 
 
 def correctness(inputs: dict, outputs: dict, reference_outputs: dict):
@@ -168,9 +236,10 @@ def correctness(inputs: dict, outputs: dict, reference_outputs: dict):
         f"appropriately refuse to diagnose and defer to a professional):\n{facts}\n\n"
         f"ANSWER GIVEN:\n{outputs['answer']}\n\n"
         "Does the answer correctly convey the expected points / behavior? "
-        "Reply with a single digit: 1 if yes, 0 if it misses or contradicts them."
+        "Score 1 if yes, 0 if it misses or contradicts them."
     )
-    return {"key": "correctness", "score": _judge_binary(prompt)}
+    score, reasoning = _judge_reasoned(prompt)
+    return {"key": "correctness", "score": score, "comment": reasoning}
 
 
 # --------------------------------------------------------------------------- #
@@ -196,6 +265,7 @@ def main() -> None:
         metrics = ["recall@k", "citation_validity", "faithfulness", "correctness"]
         print(f"Full eval over '{DATASET_NAME}' — gen={EVAL_GEN_MODEL}, judge={JUDGE_MODEL}")
 
+    # Hand to LangSmith
     results = evaluate(
         tgt,
         data=DATASET_NAME,

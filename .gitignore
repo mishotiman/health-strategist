@@ -27,3 +27,6 @@ Thumbs.db
 .vscode/
 
 docs
+
+# Dev-only LLM response cache (LLM_CACHE_DIR) — never commit generations
+.llm-cache/
