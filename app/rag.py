@@ -42,7 +42,7 @@ def retrieve(question: str, k: int = 6, fetch_k: int | None = None) -> list[dict
     with get_connection() as conn, conn.cursor() as cur:
         if _EF_SEARCH:  # int() guards the interpolation (SET rejects bound params)
             cur.execute(f"SET LOCAL hnsw.ef_search = {int(_EF_SEARCH)}")
-        cur.execute(
+        cur.execute( # sort every chunk by distance to the neighbors, give me the closest ones
             """
             SELECT c.id, c.content, c.page,
                    d.title, d.authors, d.year, d.source,
@@ -56,4 +56,20 @@ def retrieve(question: str, k: int = 6, fetch_k: int | None = None) -> list[dict
         )
         columns = [desc[0] for desc in cur.description]
         rows = [dict(zip(columns, row)) for row in cur.fetchall()]
-    return rows[:k]
+    return rows[:k] # k dicts/chunks returned
+
+    # Sample output of retrieve -> list[dict], each dict being a chunk:
+    # [
+    #   {
+    #     "id": 118432,                    # chunk id
+    #     "content": "Dosage recommendations and adverse effects ... "  # FULL passage text, not truncated
+    #     "page": 14,                      # page in the source PDF
+    #     "title": "Amino acids regulating skeletal muscle metabolism: ...",
+    #     "authors": "Zhang, Y.; ...",
+    #     "year": 2024,
+    #     "source": "https://doi.org/10.1186/s12986-024-00820-0",
+    #     "similarity": 0.692              # cosine, 1.0 = identical direction
+    #   },
+    #   { ... },   # chunk 2
+    #   { ... },   # chunk 3
+    # ]

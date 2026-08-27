@@ -53,3 +53,9 @@ def answer_question(question: str, k: int = 6, model: str | None = None) -> dict
                    "content": f"Research passages:\n\n{context}\n\nQuestion: {question}"}],
     )
     return {"answer": answer, "chunks": chunks, "context": context}
+
+# question → retrieve(6 chunks) → build_context() → Claude → cited answer
+#                                       ↓
+#                         "[1] <passage text>
+#                          (Source: title; authors; year. DOI)
+#                          [2] <passage text> ..."

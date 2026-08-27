@@ -23,7 +23,7 @@ class AskRequest(BaseModel):
     question: str
     k: int = 6
 
-
+# Retrieves, used to measure RAG's retrieval quality
 @router.post("/search")
 def search(req: AskRequest, request: Request):
     ratelimit.enforce(f"search:{client_ip(request)}", ratelimit.SEARCH_IP, "searches")
@@ -42,7 +42,7 @@ def search(req: AskRequest, request: Request):
         ],
     }
 
-
+# Retrieves + generates a cited answer (whole RAG)
 @router.post("/ask")
 def ask(req: AskRequest, request: Request):
     ratelimit.enforce(f"ask:{client_ip(request)}", ratelimit.ASK_IP, "questions")
