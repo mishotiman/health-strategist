@@ -1,6 +1,12 @@
 """Shared question-answering logic used by both the /ask endpoint and the eval
 harness, so they exercise exactly the same retrieval + generation path."""
 
+# question → retrieve(6 chunks) → build_context() → Claude → cited answer
+#                                       ↓
+#                         "[1] <passage text>
+#                          (Source: title; authors; year. DOI)
+#                          [2] <passage text> ..."
+
 from __future__ import annotations
 
 import anthropic
@@ -53,9 +59,3 @@ def answer_question(question: str, k: int = 6, model: str | None = None) -> dict
                    "content": f"Research passages:\n\n{context}\n\nQuestion: {question}"}],
     )
     return {"answer": answer, "chunks": chunks, "context": context}
-
-# question → retrieve(6 chunks) → build_context() → Claude → cited answer
-#                                       ↓
-#                         "[1] <passage text>
-#                          (Source: title; authors; year. DOI)
-#                          [2] <passage text> ..."

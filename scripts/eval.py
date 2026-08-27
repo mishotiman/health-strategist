@@ -5,7 +5,10 @@
 Pushes the golden set as a LangSmith dataset, runs the /ask pipeline over it,
 and scores each answer with four transparent evaluators:
 
-  recall@k          (deterministic) — did the right paper make the top-k?
+  recall@k          (deterministic) — did a valid paper make the top-k?
+  mrr               (deterministic) — how HIGH did the first valid one rank?
+                                      (recall@k is saturated; this is what
+                                       reranking experiments move)
   citation_validity (deterministic) — do [n] citations point to real passages?
   faithfulness      (LLM judge)     — is every claim supported by the passages?
   correctness       (LLM judge)     — does the answer convey the expected facts /
@@ -111,10 +114,15 @@ def target(inputs: dict) -> dict:
     }
 
 
+# Set by --rerank. Module-level because LangSmith calls target_retrieval with
+# only the example's inputs, so there is nowhere else to thread a flag through.
+USE_RERANK: bool | None = None
+
+
 def target_retrieval(inputs: dict) -> dict:
     """Retrieval only — no generation, so no Anthropic spend (Voyage embeddings
     are a separate provider). Used by --retrieval-only."""
-    chunks = retrieve(inputs["question"], k=6)
+    chunks = retrieve(inputs["question"], k=6, use_rerank=USE_RERANK)
     return {
         "retrieved_sources": [c["source"] for c in chunks],
         "num_passages": len(chunks),
@@ -144,6 +152,36 @@ def recall_at_k(outputs: dict, reference_outputs: dict):
         return {"key": "recall@k", "score": None}
     hit = any(e in outputs["retrieved_sources"] for e in expected)
     return {"key": "recall@k", "score": 1.0 if hit else 0.0}
+
+
+def mrr(outputs: dict, reference_outputs: dict):
+    """Mean reciprocal rank of the first genuinely-answering paper.
+
+    recall@k only asks whether a valid paper is somewhere in the top k, so once
+    the answer key was widened for the 4.2k corpus it saturated at 0.96 and went
+    blind to ORDER. Reranking and ef_search tuning change order, not membership —
+    moving a valid paper from rank 5 to rank 1 leaves recall@k untouched and takes
+    MRR from 0.2 to 1.0. This is the metric those experiments are measured on.
+
+    Scored over deduplicated DOCUMENT order: retrieval returns chunks and one
+    paper can occupy several slots, which is a property of chunking, not of
+    ranking quality.
+    """
+    expected = reference_outputs.get("expected_sources")
+    if expected is None:
+        single = reference_outputs.get("expected_source")
+        expected = [single] if single else []
+    if not expected:
+        return {"key": "mrr", "score": None}  # no answer key: guardrail / out-of-scope
+
+    seen: list[str] = []
+    for source in outputs["retrieved_sources"]:
+        if source not in seen:
+            seen.append(source)
+    for rank, source in enumerate(seen, start=1):
+        if source in set(expected):
+            return {"key": "mrr", "score": 1.0 / rank}
+    return {"key": "mrr", "score": 0.0}
 
 
 def citation_validity(outputs: dict, reference_outputs: dict):
@@ -266,21 +304,34 @@ def main() -> None:
     ap = argparse.ArgumentParser(description="RAG eval harness")
     ap.add_argument(
         "--retrieval-only", action="store_true",
-        help="score retrieval only (recall@k) — no LLM generation, zero Anthropic spend",
+        help="score retrieval only (recall@k, mrr) — no LLM generation, zero Anthropic spend",
+    )
+    ap.add_argument(
+        "--rerank", dest="rerank", action="store_true", default=None,
+        help="force reranking on for this run (overrides RAG_RERANK)",
+    )
+    ap.add_argument(
+        "--no-rerank", dest="rerank", action="store_false",
+        help="force reranking off for this run",
     )
     args = ap.parse_args()
+
+    global USE_RERANK
+    USE_RERANK = args.rerank
 
     ensure_dataset()
 
     if args.retrieval_only:
-        tgt, evaluators = target_retrieval, [recall_at_k]
-        prefix, metrics = "phs-retrieval-v3", ["recall@k"]
-        print("Retrieval-only: recall@k over Voyage retrieval — no Anthropic spend.")
+        tgt, evaluators = target_retrieval, [recall_at_k, mrr]
+        prefix, metrics = "phs-retrieval-v3", ["recall@k", "mrr"]
+        mode = {True: "on", False: "off", None: "per RAG_RERANK"}[USE_RERANK]
+        print(f"Retrieval-only: recall@k + mrr over Voyage retrieval — no "
+              f"Anthropic spend. Rerank: {mode}.")
     else:
         tgt = target
-        evaluators = [recall_at_k, citation_validity, faithfulness, correctness]
+        evaluators = [recall_at_k, mrr, citation_validity, faithfulness, correctness]
         prefix = "phs-baseline-v3"
-        metrics = ["recall@k", "citation_validity", "faithfulness", "correctness"]
+        metrics = ["recall@k", "mrr", "citation_validity", "faithfulness", "correctness"]
         print(f"Full eval over '{DATASET_NAME}' — gen={EVAL_GEN_MODEL}, judge={JUDGE_MODEL}")
 
     # Hand to LangSmith

@@ -67,6 +67,7 @@ fabricating scores, and the golden sets still encoded assumptions from the origi
 | RAG metric (`scripts/eval.py`) | v1 · 13 papers | v2 · 4.2k<br>broken judge | v3 · 4.2k<br>judge fixed | **v3 · + recalibrated set** |
 |---|---|---|---|---|
 | recall@k | 1.00 | 0.75 | 0.75 | **0.96** (n=24) |
+| mrr | — | — | — | **0.84** (n=24) |
 | citation_validity | 1.00 | 1.00 | 1.00 | **1.00** |
 | faithfulness | 0.92 | 0.52 | 0.97 | **1.00** |
 | correctness | 0.88 | 0.81 | 0.87 | **0.97** |
@@ -129,6 +130,44 @@ coverage, and `health_data` answers a miss by naming the metrics that *are* trac
 rather than a bare "no data". Behavior correctness went 0.84 → **1.00**, with the
 three cases now opening "the corpus doesn't contain a study on…" and then giving only
 what they can actually support.
+
+### Retrieval quality: what the measurements actually said
+
+With the golden sets recalibrated, `recall@k` sits at 0.96 — good for catching
+regressions, but nearly saturated, so it cannot show an *improvement*. The harness
+therefore also scores **MRR**, which is rank-sensitive: moving a valid paper from
+rank 5 to rank 1 leaves `recall@k` untouched and takes MRR from 0.2 to 1.0. Three
+candidate improvements were then priced against it, and two were rejected:
+
+| change | outcome | shipped |
+|---|---|---|
+| `hnsw.ef_search` tuning | **flat at every value 20→400** (recall 0.96, MRR 0.84) | no — the index was never the bottleneck |
+| Voyage `rerank-2.5` | MRR **0.84 → 0.80**, plus per-query cost and latency | implemented, default **off** |
+| per-document diversity cap | 3.25 → 3.62 distinct papers at no cost to any metric | **yes**, cap 3 |
+
+**The reranker not helping is a real result, not a broken integration** — verified by
+inspecting its output, which returns sensible 0.9+ relevance scores. It stays in the
+codebase behind `RAG_RERANK`, because the honest reading is "no measurable benefit on
+24 questions", not "never useful": at this sample size a small gain is undetectable
+either way.
+
+**The defect worth fixing turned out to be evidence concentration.** Chunks from one
+paper cluster in meaning-space, so an uncapped top-6 drew on a mean of just **3.25
+distinct papers**, with one question taking all six passages from a *single* paper —
+weak grounding for a product that sells breadth of peer-reviewed evidence. Capping
+passages per paper fixes it, but the full eval priced it as a trade rather than a
+free win:
+
+| cap | distinct papers in top-6 | correctness |
+|---|---|---|
+| off | 3.25 (min 1, seven questions ≤2) | 0.97 |
+| **3** | **3.62 (min 2, one question ≤2)** | **0.97** |
+| 2 | 4.29 (min 3, none ≤2) | 0.84 |
+
+Capping to 2 swaps the authoritative paper's 3rd–5th passages — the ones carrying the
+specific numbers an answer needs — for weaker passages elsewhere, and answer
+correctness pays for the extra citations. The default takes the diversity that is free
+and stops at the knee.
 
 ### What these numbers do and don't prove
 

@@ -8,6 +8,7 @@ truth that could silently drift from app.config.
 
 from __future__ import annotations
 
+import logging
 import os
 
 import voyageai
@@ -17,6 +18,8 @@ from app.db import get_connection
 
 # Optional HNSW recall knob (higher = better recall, slower). Unset -> pgvector's
 # default. Worth setting once the ANN index exists (scripts/index_corpus.sql).
+log = logging.getLogger(__name__)
+
 _EF_SEARCH = os.environ.get("RAG_HNSW_EF_SEARCH")
 
 _voyage = voyageai.Client()  # reads VOYAGE_API_KEY
@@ -29,15 +32,83 @@ def embed_query(text: str) -> list[float]:
                          output_dimension=settings.embedding_dim).embeddings[0]
 
 
-def retrieve(question: str, k: int = 6, fetch_k: int | None = None) -> list[dict]:
+def diversify(rows: list[dict], k: int, per_doc: int) -> list[dict]:
+    """Keep the best k passages, allowing at most `per_doc` from any one paper.
+
+    Passages from the same paper sit close together in meaning-space, so a plain
+    top-k often stacks several chunks of one document and calls it six sources.
+    Capping trades a slightly weaker passage for a different paper, which is the
+    right trade when the answer cites its evidence.
+
+    Order is otherwise preserved, so this composes with whatever ranked `rows`.
+    If capping cannot fill k (a narrow topic with few papers), the skipped
+    passages top it back up rather than returning short.
+    """
+    if per_doc <= 0:
+        return rows[:k]
+    kept, overflow, counts = [], [], {}
+    for row in rows:
+        source = row["source"]
+        if counts.get(source, 0) < per_doc:
+            counts[source] = counts.get(source, 0) + 1
+            kept.append(row)
+            if len(kept) == k:
+                return kept
+        else:
+            overflow.append(row)
+    return (kept + overflow)[:k]
+
+
+def rerank(question: str, rows: list[dict], k: int) -> list[dict]:
+    """Reorder candidates by true relevance and keep the best k.
+
+    The vector search ranks by bi-encoder cosine: question and passage are
+    embedded SEPARATELY and compared, so the score says "these occupy a similar
+    region of meaning-space", not "this passage answers this question". That is
+    why cosine could not distinguish a covered topic from an uncovered one on
+    this corpus (see app/agent.py). A reranker is a cross-encoder: it reads the
+    question and the passage TOGETHER and scores actual relevance, which is far
+    better at ordering but too slow to run over 275k passages — hence
+    fetch-wide-then-rerank.
+
+    Failures are swallowed on purpose: a reranker outage should degrade
+    retrieval to plain vector order, not take /chat and /ask down with it.
+    """
+    if not rows:
+        return rows
+    try:
+        result = _voyage.rerank(question, [r["content"] for r in rows],
+                                model=settings.rerank_model, top_k=k)
+    except Exception:  # noqa: BLE001 - degrade to vector order, never fail the request
+        log.exception("rerank failed; falling back to vector order")
+        return rows[:k]
+    ordered = []
+    for item in result.results:
+        row = dict(rows[item.index])
+        row["rerank_score"] = item.relevance_score
+        ordered.append(row)
+    return ordered
+
+
+def retrieve(question: str, k: int = 6, fetch_k: int | None = None,
+             use_rerank: bool | None = None) -> list[dict]:
     """Return the top-k chunks most similar to the question, with their paper
     metadata and a cosine-similarity score (1.0 = identical direction).
 
     `fetch_k` is how many candidates to pull from the DB before trimming to `k`.
-    For now they're equal; a future reranker will fetch wide (fetch_k >> k) and
-    reorder down to k — that's the hook the deferred quality pass plugs into.
+    With reranking on it defaults to settings.rag_fetch_k (>> k): fetch wide
+    cheaply, then let the reranker reorder down to k. With it off the two are
+    equal and this is a plain vector search, as before.
+
+    `use_rerank` overrides settings.rag_rerank for one call — the eval harness
+    uses it to measure both configurations without a restart.
     """
-    fetch_k = fetch_k or k
+    use_rerank = settings.rag_rerank if use_rerank is None else use_rerank
+    # Fetch wider than k whenever a post-filter will trim: the per-document cap
+    # needs spare candidates to swap in, and reranking needs a pool to reorder.
+    if fetch_k is None:
+        widen = use_rerank or settings.rag_max_chunks_per_doc > 0
+        fetch_k = settings.rag_fetch_k if widen else k
     qvec = str(embed_query(question))  # pgvector accepts the '[...]' text form
     with get_connection() as conn, conn.cursor() as cur:
         if _EF_SEARCH:  # int() guards the interpolation (SET rejects bound params)
@@ -56,8 +127,6 @@ def retrieve(question: str, k: int = 6, fetch_k: int | None = None) -> list[dict
         )
         columns = [desc[0] for desc in cur.description]
         rows = [dict(zip(columns, row)) for row in cur.fetchall()]
-    return rows[:k] # k dicts/chunks returned
-
     # Sample output of retrieve -> list[dict], each dict being a chunk:
     # [
     #   {
@@ -73,3 +142,8 @@ def retrieve(question: str, k: int = 6, fetch_k: int | None = None) -> list[dict
     #   { ... },   # chunk 2
     #   { ... },   # chunk 3
     # ]
+    # Rerank first (it reorders), then cap per document (it filters) — capping
+    # before reranking would discard passages the reranker might have promoted.
+    if use_rerank:
+        rows = rerank(question, rows, fetch_k)
+    return diversify(rows, k, settings.rag_max_chunks_per_doc)
