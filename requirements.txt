@@ -36,6 +36,9 @@ langgraph-checkpoint-postgres==3.1.0  # durable conversation state (replaces Mem
 # Auth: accounts, external sign-in, transactional email
 argon2-cffi==25.1.0  # argon2id password hashing
 authlib==1.7.2       # Google/Microsoft OIDC (discovery, JWKS, PKCE, nonce)
+cryptography==49.0.0 # Fernet, for encrypting provider OAuth tokens at rest
+                     # (app/crypto.py). Arrived as an authlib transitive dep;
+                     # pinned explicitly now that we import it directly.
 resend==2.34.0       # verification + password-reset email
 
 # Tests

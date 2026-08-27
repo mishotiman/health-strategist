@@ -19,7 +19,17 @@ from __future__ import annotations
 
 import datetime as dt
 
+from app.crypto import decrypt, encrypt
 from app.db import get_connection
+
+
+def _decrypted(row: dict) -> dict:
+    """Tokens as the caller needs them. Storage is ciphertext (app.crypto); every
+    read goes through here so no caller has to remember."""
+    for field in ("access_token", "refresh_token"):
+        if field in row:
+            row[field] = decrypt(row[field])
+    return row
 
 
 def save_tokens(user_id: int, provider: str, access_token: str,
@@ -46,7 +56,8 @@ def save_tokens(user_id: int, provider: str, access_token: str,
                                             provider_connections.external_user_id),
                 updated_at       = now()
             """,
-            (user_id, provider, access_token, refresh_token, expires_at, external_user_id),
+            (user_id, provider, encrypt(access_token), encrypt(refresh_token),
+             expires_at, external_user_id),
         )
         conn.commit()
 
@@ -62,7 +73,7 @@ def get(user_id: int, provider: str) -> dict | None:
         )
         row = cur.fetchone()
         cols = [d[0] for d in cur.description]
-    return dict(zip(cols, row)) if row else None
+    return _decrypted(dict(zip(cols, row))) if row else None
 
 
 def set_external_user_id(user_id: int, provider: str, external_user_id: str) -> None:
@@ -130,7 +141,8 @@ def save_pending(user_id: int, provider: str, access_token: str,
                 expires_at       = EXCLUDED.expires_at,
                 created_at       = now()
             """,
-            (user_id, provider, external_user_id, access_token, refresh_token, expires_at),
+            (user_id, provider, external_user_id, encrypt(access_token),
+             encrypt(refresh_token), expires_at),
         )
         conn.commit()
 
@@ -149,7 +161,7 @@ def get_pending(user_id: int, provider: str) -> dict | None:
         )
         row = cur.fetchone()
         cols = [d[0] for d in cur.description]
-    return dict(zip(cols, row)) if row else None
+    return _decrypted(dict(zip(cols, row))) if row else None
 
 
 def drop_pending(user_id: int, provider: str) -> bool:
