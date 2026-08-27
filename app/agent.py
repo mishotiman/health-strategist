@@ -166,7 +166,7 @@ def _configurable(config: RunnableConfig | None) -> dict:
     return (config or {}).get("configurable") or {}
 
 
-@tool
+@tool # @tool decorator (part of LangChain), generates per-tool JSON schema (from docstring) + signature that Claude can read.
 def knowledge_search(query: str, config: RunnableConfig = None) -> str:
     """Search the peer-reviewed sports-science research corpus. Use for any claim
     about training, nutrition, supplements, sleep, recovery, or stress. Returns

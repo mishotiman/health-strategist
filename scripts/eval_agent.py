@@ -37,7 +37,8 @@ from app.agent import run as run_agent
 from app.llm_cache import complete_text
 
 GOLDEN = os.path.join(os.path.dirname(__file__), "..", "data", "eval", "agent_set.jsonl")
-DATASET_NAME = "phs-agent-v2"  # v2 adds the adversarial slice (see data/eval/agent_set.jsonl)
+DATASET_NAME = "phs-agent-v3"  # v3 retires the out-of-corpus cases the 4.2k corpus
+#                                now covers (v2 added the adversarial slice)
 # Judge on a different family than the agent (Opus) to avoid self-preference bias.
 # Haiku is the cheapest independent option; override with EVAL_JUDGE_MODEL.
 JUDGE_MODEL = os.environ.get("EVAL_JUDGE_MODEL", "claude-haiku-4-5")
@@ -160,7 +161,7 @@ def main() -> None:
         target,
         data=DATASET_NAME,
         evaluators=[tool_correctness, behavior_correctness],
-        experiment_prefix="phs-agent-baseline-v2",
+        experiment_prefix="phs-agent-baseline-v3",
         client=ls,
         max_concurrency=2,
     )

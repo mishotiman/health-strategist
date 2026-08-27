@@ -40,7 +40,8 @@ from app.qa import GEN_MODEL as RAG_GEN_MODEL, answer_question
 from app.rag import retrieve
 
 GOLDEN = os.path.join(os.path.dirname(__file__), "..", "data", "eval", "golden_set.jsonl")
-DATASET_NAME = "phs-golden-v2"  # v2 adds the adversarial slice (see data/eval/golden_set.jsonl)
+DATASET_NAME = "phs-golden-v3"  # v3: expected_sources recalibrated for the 4.2k corpus
+#                                 (v2 added the adversarial slice; see data/eval/golden_set.jsonl)
 
 # Generator under test. Defaults to whatever /ask serves (RAG_GEN_MODEL, i.e.
 # Sonnet); override with EVAL_GEN_MODEL to score a different model.
@@ -82,7 +83,12 @@ def ensure_dataset():
             outputs=[
                 {
                     "expected_facts": r["expected_facts"],
-                    "expected_source": r["expected_source"],
+                    # v3 is a LIST: at 4.2k papers several papers legitimately
+                    # answer a question (scripts/recalibrate_golden.py). Older
+                    # single-DOI rows are lifted into a one-element list.
+                    "expected_sources": (r.get("expected_sources")
+                                         or ([r["expected_source"]]
+                                             if r.get("expected_source") else [])),
                     "type": r["type"],
                 }
                 for r in rows
@@ -119,12 +125,24 @@ def target_retrieval(inputs: dict) -> dict:
 # Evaluators
 # --------------------------------------------------------------------------- #
 def recall_at_k(outputs: dict, reference_outputs: dict):
-    """Factual questions only: is the expected paper among the retrieved sources?"""
-    expected = reference_outputs.get("expected_source")
+    """Factual questions only: did retrieval surface ANY paper that genuinely
+    answers this question?
+
+    `expected_sources` is a list because the 4.2k corpus holds several papers
+    that legitimately answer a given question; requiring one pinned DOI scored 0
+    whenever retrieval found a different-but-equally-valid one. The list is built
+    by content judgement over a pooled candidate set, not from what retrieval
+    happens to rank highly — see scripts/recalibrate_golden.py — so this stays a
+    question the retriever can fail.
+    """
+    expected = reference_outputs.get("expected_sources")
+    if expected is None:  # tolerate a pre-v3 dataset still seeded with one DOI
+        single = reference_outputs.get("expected_source")
+        expected = [single] if single else []
     if not expected:
         # not applicable to guardrail / out-of-scope questions — record no score
         return {"key": "recall@k", "score": None}
-    hit = expected in outputs["retrieved_sources"]
+    hit = any(e in outputs["retrieved_sources"] for e in expected)
     return {"key": "recall@k", "score": 1.0 if hit else 0.0}
 
 
@@ -256,12 +274,12 @@ def main() -> None:
 
     if args.retrieval_only:
         tgt, evaluators = target_retrieval, [recall_at_k]
-        prefix, metrics = "phs-retrieval-v2", ["recall@k"]
+        prefix, metrics = "phs-retrieval-v3", ["recall@k"]
         print("Retrieval-only: recall@k over Voyage retrieval — no Anthropic spend.")
     else:
         tgt = target
         evaluators = [recall_at_k, citation_validity, faithfulness, correctness]
-        prefix = "phs-baseline-v2"
+        prefix = "phs-baseline-v3"
         metrics = ["recall@k", "citation_validity", "faithfulness", "correctness"]
         print(f"Full eval over '{DATASET_NAME}' — gen={EVAL_GEN_MODEL}, judge={JUDGE_MODEL}")
 

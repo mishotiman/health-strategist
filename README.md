@@ -59,79 +59,79 @@ flowchart TD
 
 ## Eval baselines (LangSmith)
 
-The corpus grew from a 13-paper hand-picked sample to **~4,200 open-access papers
-(275k passages)**, and the judges were rebuilt after the v2 numbers turned out to be
-partly fabricated (below). Current baselines, all `n=31` unless noted:
+Two things had to be repaired before these numbers meant anything: the judges were
+fabricating scores, and the golden sets still encoded assumptions from the original
+13-paper corpus. Both are fixed below. Current baselines, Sonnet generator (what
+`/ask` serves), Haiku judge:
 
-| RAG metric (`scripts/eval.py`) | v1 · 13 papers<br>Opus, digit-judge | v2 · 4.2k<br>Sonnet, digit-judge | **v3 · 4.2k<br>Sonnet, reasoned judge** | v3 · 4.2k<br>Opus, reasoned judge |
+| RAG metric (`scripts/eval.py`) | v1 · 13 papers | v2 · 4.2k<br>broken judge | v3 · 4.2k<br>judge fixed | **v3 · + recalibrated set** |
 |---|---|---|---|---|
-| recall@k | 1.00 | 0.75 | **0.75** (n=24) | 0.75 (n=24) |
-| citation_validity | 1.00 | 1.00 | **1.00** | 1.00 |
-| faithfulness | 0.92 | 0.52 | **0.97** | 1.00 |
-| correctness | 0.88 | 0.81 | **0.87** | 0.77 |
+| recall@k | 1.00 | 0.75 | 0.75 | **0.96** (n=24) |
+| citation_validity | 1.00 | 1.00 | 1.00 | **1.00** |
+| faithfulness | 0.92 | 0.52 | 0.97 | **1.00** |
+| correctness | 0.88 | 0.81 | 0.87 | **0.97** |
 
-Sonnet is the bolded column because it's what `/ask` actually serves; the Opus column
-holds the generator fixed at v1's model to isolate it. `recall@k` scores only the 24
-factual cases — guardrail and out-of-corpus questions have no `expected_source`, so
-they're recorded unscored rather than silently counted.
-
-**Agent baseline** (`scripts/eval_agent.py`, first run against the 4.2k corpus):
-tool routing **1.00** (n=14) · behavior correctness **0.79** (n=19).
+**Agent** (`scripts/eval_agent.py`): tool routing **1.00** (n=14) · behavior
+correctness **0.84** (n=19). Every score carries its `n` because an unscorable case
+is recorded as unscored, never as a 0 — see below.
 
 ### The v2 numbers were wrong, and finding out was the useful part
 
-`faithfulness` 0.52 was not a quality signal — it was a **broken evaluator**. The judge
-was asked for a bare digit at `max_tokens=8`; when it instead reasoned through the claims
-it ran out of budget mid-sentence and never wrote its verdict, and the parser then
-scavenged the last `0` or `1` out of prose dense with `[1]`, `20%` and `1992`. At 256
-tokens, **18 of 31 faithfulness scores were assigned that way** — near-random. Three
-things came out of the fix:
+`faithfulness` 0.52 was not a quality signal, it was a **broken evaluator**. The judge
+was asked for a bare digit at `max_tokens=8`; when it reasoned through the claims
+instead it ran out of budget mid-sentence, never wrote its verdict, and the parser
+scavenged the last `0` or `1` out of prose dense with `[1]`, `20%` and `1992`. **18 of
+31 scores were assigned that way.** The judges now reason first and close with a
+mandatory verdict line, the rationale is attached to the score as the evaluator's
+comment so a failing case explains itself in the trace, and an unparseable verdict
+scores `None` rather than a guess.
 
-- **The judges now reason before ruling**, and the rationale is attached to the score as
-  the evaluator's comment, so a failing case explains itself in the trace. A real failure
-  now reads like: *"the answer states β-alanine has 'very-low certainty' but passage [2]
-  assigns it 'Moderate-certainty evidence' — a factual contradiction."*
-- **An unparseable verdict scores `None`, never a guess.** A dropped case shows up as a
-  smaller `n`, which is visible; a fabricated 0 is not. This is why every score above
-  carries its `n`.
-- **Groundedness was never the problem.** With the judge fixed, both generators score
-  0.97–1.00 on the 4,200-paper corpus, against 0.92 for Opus on the original 13. The
-  scale-up did not make answers less grounded.
+**How noisy is a 31-case LLM-judged set?** Measured, not assumed: Opus `correctness`
+read **0.87 → 0.81 → 0.77** across three runs over *identical cached answers*, with
+only the judge re-sampled. Treat sub-10-point differences on sets this size as noise.
 
-**`recall@k` 0.75 is the one real signal.** It's identical across every configuration
-above — which is expected, since retrieval runs before generation and can't be moved by
-the generator. Retrieval over 4,200 papers is genuinely harder than over 13, where almost
-anything retrieved was right. Part of the gap is still measurement: `recall@k` is the only
-metric `expected_source` feeds, and those DOIs are pinned to the original 13 papers, so an
-answer that finds a different-but-equally-valid paper scores 0.
+### Recalibrating the golden sets for the corpus they now run against
 
-**How noisy is a 31-case LLM-judged set?** Measured, not guessed: Opus `correctness` read
-**0.87 → 0.81 → 0.77** across three runs over *identical cached answers*, with only the
-judge re-sampled. Differences under ~10 points on sets this size are inside the noise.
+Both sets were written for 13 papers and were quietly penalising correct behaviour:
+
+- **`expected_source` was a single pinned DOI.** At 4,200 papers several papers
+  legitimately answer a question, so `recall@k` scored 0 whenever retrieval surfaced a
+  different-but-equally-valid one. `scripts/recalibrate_golden.py` widens it to
+  `expected_sources` by **pooling** (the method IR benchmarks have used for decades):
+  candidates come from two independent retrieval arms — dense vector search *and*
+  lexical matching — and each is admitted or rejected by a judge reading its passages,
+  with rank withheld. A paper qualifies because it answers the question, never because
+  retrieval ranked it highly, so `recall@k` still asks something the retriever can
+  fail. It landed at 0.96, not 1.00.
+- **The "out-of-corpus" cases were no longer out of corpus.** Three cases expected the
+  system to say it had nothing on beta-alanine, marathon pacing or BCAAs; the corpus
+  holds 54, 9 and 196 papers on them. They were replaced with topics it genuinely
+  cannot answer, taken from what `data/corpus_topics.yml` deliberately excludes and
+  verified by chunk count: elevation training masks (0 papers), nootropics (1),
+  pediatric resistance training (2).
+
+**The replacements immediately caught a real defect.** Three agent cases now fail
+because **the agent does not reliably admit missing evidence**: asked about training
+masks it searched, found nothing on them, and answered with unsupported specifics;
+asked to program training for a 12-year-old it searched four times and produced a
+detailed programme; asked for a VO2max it does not track, it reported a number. That
+last one — fabricating a value for the user's own health metric — is the highest
+-severity failure this project can produce, and the stale set could not see any of
+them. Fixing that behaviour is the top open item.
 
 ### What these numbers do and don't prove
 
-They're small, self-authored *development* sets — smoke tests, not generalization claims.
-`faithfulness` / `correctness` are LLM-judged by a **different family** than the generator
-(`claude-haiku-4-5` by default — independent of both the Sonnet RAG generator and the Opus
-agent) to blunt self-preference bias. A high score on a set you wrote yourself mostly
-measures that the system agrees with your own expectations — and the agent baseline shows
-exactly how that bites: **3 of its 4 behavior failures are stale expectations, not agent
-faults.** Cases written for the 13-paper corpus expect the agent to say beta-alanine, BCAAs
-and marathon pacing aren't covered; the current corpus holds 54, 196 and 9 papers on them
-respectively, so the agent answered correctly and was marked wrong for it.
+They're small, self-authored *development* sets — smoke tests, not generalization
+claims. `faithfulness` / `correctness` are LLM-judged by a **different family** than
+the generator (`claude-haiku-4-5` — independent of both the Sonnet RAG generator and
+the Opus agent) to blunt self-preference bias.
 
-Two next steps follow directly:
-
-- **v3 recalibration of the golden sets** — widen `expected_source` to accept the several
-  valid papers a topic now has, and retire the out-of-corpus cases the 4.2k corpus covers.
-  Until that lands, the real size of the retrieval gap is unknown, so it gates the work
-  below. The sets stand at 31 RAG / 19 agent cases, after a v2 pass added an **adversarial
-  slice** (false-premise, near-miss / out-of-corpus, subtle red-flag, megadose-safety).
-- **A retrieval-quality pass, measured** — with groundedness at 0.97+ the bottleneck is
-  demonstrably retrieval, not generation. Cheapest check first (`RAG_HNSW_EF_SEARCH`, free
-  via `--retrieval-only`), then a Voyage reranker (`app/rag.py` already exposes the
-  `fetch_k` hook for fetch-wide-then-rerank) and hybrid search, re-measuring each.
+Two honest limits on the numbers above. **`recall@k` is close to saturated**: at 0.96
+it is now good for catching regressions but has almost no headroom to demonstrate an
+improvement, so measuring a reranker needs a rank-sensitive metric (MRR or nDCG),
+which is the next thing to add. And a widened answer key makes the metric *correct*,
+not *harder* — the honest reading is that retrieval reliably surfaces at least one
+valid paper, while how well it **ranks** them is still unmeasured.
 
 ### Running the harnesses cheaply
 
