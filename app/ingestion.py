@@ -84,6 +84,23 @@ def delete_metrics(user_id: int, source: str) -> int:
     return removed
 
 
+def tracked_metric_types(user_id: int) -> list[str]:
+    """Every metric_type this user actually has data for.
+
+    Exists so a lookup that finds nothing can say WHICH metrics are tracked
+    instead of only that this one is missing. An agent told merely "no data"
+    has been observed to fill the gap with a plausible number; an agent told
+    "vo2max is not tracked; here is what is" can answer honestly.
+    """
+    with get_connection() as conn, conn.cursor() as cur:
+        cur.execute(
+            "SELECT DISTINCT metric_type FROM health_metrics WHERE user_id = %s "
+            "ORDER BY metric_type",
+            (user_id,),
+        )
+        return [r[0] for r in cur.fetchall()]
+
+
 def query_metrics(user_id: int, metric_type: str | None = None, limit: int = 100) -> list[dict]:
     sql = (
         "SELECT source, metric_date, metric_type, value, unit, text_value "

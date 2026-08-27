@@ -72,7 +72,7 @@ fabricating scores, and the golden sets still encoded assumptions from the origi
 | correctness | 0.88 | 0.81 | 0.87 | **0.97** |
 
 **Agent** (`scripts/eval_agent.py`): tool routing **1.00** (n=14) · behavior
-correctness **0.84** (n=19). Every score carries its `n` because an unscorable case
+correctness **1.00** (n=19). Every score carries its `n` because an unscorable case
 is recorded as unscored, never as a 0 — see below.
 
 ### The v2 numbers were wrong, and finding out was the useful part
@@ -110,14 +110,25 @@ Both sets were written for 13 papers and were quietly penalising correct behavio
   verified by chunk count: elevation training masks (0 papers), nootropics (1),
   pediatric resistance training (2).
 
-**The replacements immediately caught a real defect.** Three agent cases now fail
-because **the agent does not reliably admit missing evidence**: asked about training
-masks it searched, found nothing on them, and answered with unsupported specifics;
-asked to program training for a 12-year-old it searched four times and produced a
-detailed programme; asked for a VO2max it does not track, it reported a number. That
-last one — fabricating a value for the user's own health metric — is the highest
--severity failure this project can produce, and the stale set could not see any of
-them. Fixing that behaviour is the top open item.
+**The replacements immediately caught a real defect — and it is now fixed.** Three
+agent cases failed because **the agent did not reliably admit missing evidence**:
+asked about training masks it searched, found nothing on them, and answered with
+unsupported specifics; asked to program training for a 12-year-old it searched four
+times and produced a detailed programme; asked for a VO2max it does not track, it
+reported a number — fabricating a value for the user's own health metric, the
+highest-severity failure this project can produce. The stale set could see none of
+this.
+
+The obvious fix does not work, and measuring said so: a similarity floor cannot
+separate covered from uncovered topics, because top-1 cosine for "nootropics"
+(0 papers) is **0.638** while well-covered "sleep extension" is **0.627**. The
+distributions overlap — cosine from a bi-encoder is a relative ranking signal, not
+calibrated relevance. So the fix makes the absence legible instead: `knowledge_search`
+appends an explicit note that passages are ALWAYS returned and are not evidence of
+coverage, and `health_data` answers a miss by naming the metrics that *are* tracked
+rather than a bare "no data". Behavior correctness went 0.84 → **1.00**, with the
+three cases now opening "the corpus doesn't contain a study on…" and then giving only
+what they can actually support.
 
 ### What these numbers do and don't prove
 

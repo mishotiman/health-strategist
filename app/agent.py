@@ -38,7 +38,7 @@ from psycopg_pool import ConnectionPool
 from app.citations import format_chunks_with_citations
 from app.config import settings
 from app.db import get_connection
-from app.ingestion import query_metrics
+from app.ingestion import query_metrics, tracked_metric_types
 from app.prompts import GUARDRAILS
 from app.rag import retrieve
 from app.workouts import query_workouts
@@ -66,8 +66,16 @@ duration, strain, heart rate, calories, distance. Use it whenever the question i
 about what or how they've trained; `health_data` is daily recovery/sleep, not \
 individual sessions.
 - Use `memory` to read the user's goals, physical data, and injuries.
-- Ground every recommendation in retrieved evidence or the user's own data. If \
-the corpus doesn't cover something, say so instead of guessing.
+- Ground every recommendation in retrieved evidence or the user's own data.
+- `knowledge_search` ALWAYS returns passages, so their presence is NOT evidence \
+the corpus covers the topic — similarity is relative, and an unrelated question \
+still returns its nearest neighbours. Read what came back and check it addresses \
+the actual question. If it only covers adjacent subjects (altitude training when \
+asked about training masks; adult lifting when asked about a 12-year-old), say \
+the corpus doesn't cover it and stop — do not assemble an answer out of \
+near-misses.
+- Never report, estimate, or infer a metric the user's data does not contain. If \
+a metric isn't tracked, say so plainly and name what is.
 - When the user asks about their OWN data (a metric, a trend, their profile), \
 lead with the direct answer first — the actual numbers or trend — then add any \
 research or context after.
@@ -166,12 +174,32 @@ def _configurable(config: RunnableConfig | None) -> dict:
     return (config or {}).get("configurable") or {}
 
 
+# Vector search over 275k passages never comes back empty: it returns the nearest
+# neighbours, and cosine similarity is a relative ranking signal, not a calibrated
+# relevance score. Measured on this corpus, "nootropics" (0 papers) scores 0.638
+# at top-1 while "sleep extension" (well covered) scores 0.627 — the distributions
+# overlap, so NO similarity threshold separates covered from uncovered topics.
+# The signal has to come from reading the passages, so the tool result says so
+# outright rather than letting six confident-looking passages imply a coverage
+# that isn't there. This is what the agent eval caught: asked about training
+# masks (0 papers), it answered from adjacent altitude-training passages.
+_COVERAGE_CAVEAT = (
+    "\n\n---\n"
+    "COVERAGE NOTE: this search always returns the corpus's nearest passages, even "
+    "when the corpus holds nothing on the topic asked about. Their presence is not "
+    "evidence of coverage. Check that the passages above address THIS specific "
+    "question; if they only cover adjacent subjects, state plainly that the corpus "
+    "does not cover it instead of answering from the near-misses."
+)
+
+
 @tool # @tool decorator (part of LangChain), generates per-tool JSON schema (from docstring) + signature that Claude can read.
 def knowledge_search(query: str, config: RunnableConfig = None) -> str:
     """Search the peer-reviewed sports-science research corpus. Use for any claim
     about training, nutrition, supplements, sleep, recovery, or stress. Returns
     passages, each prefixed with a stable [n] citation number — cite claims with
-    that number."""
+    that number. Passages are ALWAYS returned, including for topics the corpus
+    does not cover, so verify they address the question before relying on them."""
     chunks = retrieve(query, k=6)
     if not chunks:
         return "No relevant passages found in the corpus."
@@ -181,7 +209,7 @@ def knowledge_search(query: str, config: RunnableConfig = None) -> str:
     reg = _configurable(config).get("citations")
     if reg is None:
         reg = []
-    return format_chunks_with_citations(chunks, reg)
+    return format_chunks_with_citations(chunks, reg) + _COVERAGE_CAVEAT
 
 
 @tool
@@ -198,6 +226,17 @@ def health_data(metric_type: str = "", config: RunnableConfig = None) -> str:
     a numeric value. Pass a metric_type to filter, or leave empty for all recent."""
     user_id = _configurable(config)["user_id"]
     rows = query_metrics(user_id, metric_type or None, limit=40)
+    if not rows and metric_type:
+        # Naming the tracked metrics is what prevents a fabricated answer. Told
+        # only "no data", the agent was observed reporting a plausible number for
+        # a metric the user never recorded (a VO2max); told which metrics exist,
+        # it can give the honest answer instead.
+        available = tracked_metric_types(user_id)
+        if available:
+            return (f"No '{metric_type}' data is recorded for this user. Metrics "
+                    f"actually tracked: {', '.join(available)}. Tell the user that "
+                    f"{metric_type} is not tracked — never estimate, infer or "
+                    "substitute a value for it.")
     for r in rows:  # give the model a ready-made "6h 44m" for hour-based metrics
         if r.get("unit") == "h" and r.get("value") is not None:
             r["value_display"] = _fmt_hours(r["value"])
